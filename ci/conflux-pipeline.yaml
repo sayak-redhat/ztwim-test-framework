@@ -1,0 +1,203 @@
+# =============================================================================
+# ZTWIM Test Framework - Conflux/CI Pipeline Configuration
+# =============================================================================
+# This is a template for running ZTWIM tests in CI/CD pipelines.
+# Adapt this configuration for your specific CI tool (Conflux, Jenkins, GitLab, etc.)
+#
+# Environment Variables Required:
+#   - KUBECONFIG_CONTENT or KUBECONFIG_PATH: Cluster access credentials
+#
+# Artifacts Produced:
+#   - reports/junit.xml       : JUnit XML for CI integration
+#   - test-reports/           : HTML test reports (timestamped)
+#   - logs/                   : Execution logs
+# =============================================================================
+
+# Example: GitLab CI / Conflux YAML format
+# Adapt as needed for your CI system
+
+variables:
+  PYTHON_VERSION: "3.10"
+  CLUSTER_NAME: "test01"
+  OPERATOR_TIMEOUT: "300"
+  COMPONENT_TIMEOUT: "120"
+
+stages:
+  - setup
+  - install
+  - test
+  - report
+
+# =============================================================================
+# Stage 1: Setup - Prepare the environment
+# =============================================================================
+setup_environment:
+  stage: setup
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  script:
+    - echo "Setting up test environment..."
+    - python --version
+    - pip install -r requirements.txt
+    - echo "Dependencies installed"
+  artifacts:
+    paths:
+      - .venv/
+    expire_in: 1 hour
+  tags:
+    - kubernetes
+
+# =============================================================================
+# Stage 2: Install - Install ZTWIM (Optional - can be combined with test)
+# =============================================================================
+install_ztwim:
+  stage: install
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  dependencies:
+    - setup_environment
+  script:
+    - echo "Installing ZTWIM operator and operands..."
+    
+    # Setup kubeconfig from CI secret
+    - |
+      if [ -n "$KUBECONFIG_CONTENT" ]; then
+        echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      elif [ -n "$KUBECONFIG_PATH" ]; then
+        export KUBECONFIG=$KUBECONFIG_PATH
+      else
+        echo "ERROR: KUBECONFIG not configured"
+        exit 2
+      fi
+    
+    # Run installation
+    - python scripts/install_ztwim.py --skip-if-exists --operator-timeout $OPERATOR_TIMEOUT --component-timeout $COMPONENT_TIMEOUT
+    
+  rules:
+    - if: '$SKIP_INSTALL != "true"'
+  tags:
+    - kubernetes
+
+# =============================================================================
+# Stage 3: Test - Run all tests
+# =============================================================================
+run_tests:
+  stage: test
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  dependencies:
+    - setup_environment
+    - install_ztwim
+  script:
+    - echo "Running ZTWIM tests..."
+    
+    # Setup kubeconfig
+    - |
+      if [ -n "$KUBECONFIG_CONTENT" ]; then
+        echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      elif [ -n "$KUBECONFIG_PATH" ]; then
+        export KUBECONFIG=$KUBECONFIG_PATH
+      fi
+    
+    # Run tests (skip install since we did it in previous stage)
+    - |
+      pytest tests/ \
+        --skip-install \
+        --junitxml=reports/junit.xml \
+        -v
+    
+  artifacts:
+    when: always
+    paths:
+      - reports/
+      - test-reports/
+      - logs/
+    reports:
+      junit: reports/junit.xml
+    expire_in: 30 days
+  tags:
+    - kubernetes
+
+# =============================================================================
+# Stage 3b: Test - Run only SpireServer tests (example filtered run)
+# =============================================================================
+test_spire_server:
+  stage: test
+  extends: .test_template
+  variables:
+    TEST_MARKERS: "spire_server"
+  rules:
+    - if: '$RUN_COMPONENT_TESTS == "true"'
+
+test_spire_agent:
+  stage: test
+  extends: .test_template
+  variables:
+    TEST_MARKERS: "spire_agent"
+  rules:
+    - if: '$RUN_COMPONENT_TESTS == "true"'
+
+test_csi_driver:
+  stage: test
+  extends: .test_template
+  variables:
+    TEST_MARKERS: "order(5)"
+  rules:
+    - if: '$RUN_COMPONENT_TESTS == "true"'
+
+test_oidc_discovery:
+  stage: test
+  extends: .test_template
+  variables:
+    TEST_MARKERS: "oidc_discovery"
+  rules:
+    - if: '$RUN_COMPONENT_TESTS == "true"'
+
+# Test template for component-specific tests
+.test_template:
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  script:
+    - |
+      if [ -n "$KUBECONFIG_CONTENT" ]; then
+        echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      fi
+    - pytest tests/ --skip-install -m "$TEST_MARKERS" --junitxml=reports/junit-${TEST_MARKERS}.xml -v
+  artifacts:
+    when: always
+    paths:
+      - reports/
+      - test-reports/
+    reports:
+      junit: reports/junit-*.xml
+  tags:
+    - kubernetes
+
+# =============================================================================
+# Nightly Full Test Run
+# =============================================================================
+nightly_full_test:
+  stage: test
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  script:
+    - |
+      if [ -n "$KUBECONFIG_CONTENT" ]; then
+        echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      fi
+    
+    # Full installation + all tests
+    - ./scripts/ci_run_tests.sh
+    
+  artifacts:
+    when: always
+    paths:
+      - reports/
+      - test-reports/
+      - logs/
+    reports:
+      junit: reports/junit.xml
+    expire_in: 30 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  tags:
+    - kubernetes

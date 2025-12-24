@@ -1,0 +1,506 @@
+/* ZTWIM Test Framework - Clean, High-Visibility Styles */
+
+:root {
+    /* Primary colors - high contrast */
+    --primary-red: #CC0000;
+    --primary-dark: #222222;
+    --primary-white: #FFFFFF;
+    
+    /* Status colors - bright and clear */
+    --pass-green: #28A745;
+    --fail-red: #DC3545;
+    --skip-yellow: #FFC107;
+    --error-orange: #FD7E14;
+    
+    /* Neutral colors */
+    --gray-100: #F8F9FA;
+    --gray-200: #E9ECEF;
+    --gray-300: #DEE2E6;
+    --gray-500: #6C757D;
+    --gray-700: #495057;
+    --gray-900: #212529;
+    
+    /* Accent - visible teal instead of dark blue */
+    --accent-teal: #17A2B8;
+    --accent-teal-light: #E8F7F9;
+}
+
+/* Base styles - clean white background */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    background: var(--gray-200);
+    color: var(--gray-900);
+    margin: 0;
+    padding: 20px;
+    line-height: 1.6;
+}
+
+/* Headers - bold and clear */
+h1 {
+    color: var(--gray-900);
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    padding-bottom: 12px;
+    border-bottom: 4px solid var(--primary-red);
+}
+
+h2 {
+    color: var(--gray-900);
+    font-size: 20px;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--gray-300);
+}
+
+h3 {
+    color: var(--gray-700);
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+
+/* Main container - white card */
+#container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: var(--primary-white);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 32px;
+}
+
+/* Environment section - light gray */
+#environment {
+    background: var(--gray-100);
+    border: 1px solid var(--gray-300);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+}
+
+#environment td {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--gray-300);
+    color: var(--gray-900);
+}
+
+#environment tr:last-child td {
+    border-bottom: none;
+}
+
+#environment th {
+    background: var(--gray-700);
+    color: var(--primary-white);
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+}
+
+/* Results table */
+#results-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+    font-size: 14px;
+    border: 1px solid var(--gray-300);
+}
+
+#results-table th {
+    background: var(--gray-900);
+    color: var(--primary-white);
+    padding: 14px 16px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+#results-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--gray-300);
+    vertical-align: middle;
+    background: var(--primary-white);
+}
+
+#results-table tbody tr:nth-child(even) td {
+    background: var(--gray-100);
+}
+
+#results-table tbody tr:hover td {
+    background: var(--accent-teal-light) !important;
+}
+
+/* ==========================================================================
+   TBODY ROW STYLING (tbody gets .passed/.skipped/.failed classes)
+   ========================================================================== */
+
+/* Passed rows - green left border */
+tbody.passed {
+    border-left: 4px solid var(--pass-green);
+}
+
+tbody.passed td {
+    color: var(--gray-900) !important;  /* Keep text dark! */
+}
+
+/* Failed rows - red left border */
+tbody.failed {
+    border-left: 4px solid var(--fail-red);
+}
+
+tbody.failed td {
+    color: var(--gray-900) !important;
+}
+
+/* Skipped rows - yellow left border */
+tbody.skipped {
+    border-left: 4px solid var(--skip-yellow);
+}
+
+tbody.skipped td {
+    color: var(--gray-900) !important;
+}
+
+/* Error rows - orange left border */
+tbody.error {
+    border-left: 4px solid var(--error-orange);
+}
+
+tbody.error td {
+    color: var(--gray-900) !important;
+}
+
+/* ==========================================================================
+   RESULT BADGE STYLING (the "Passed", "Failed" text in col-result)
+   ========================================================================== */
+
+/* Result badge in column - pill style */
+.col-result {
+    font-weight: 700;
+    text-align: center;
+    min-width: 90px;
+}
+
+/* Passed badge */
+tbody.passed .col-result,
+span.passed {
+    background: var(--pass-green) !important;
+    color: white !important;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    display: inline-block;
+    letter-spacing: 0.5px;
+}
+
+/* Failed badge */
+tbody.failed .col-result,
+span.failed {
+    background: var(--fail-red) !important;
+    color: white !important;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    display: inline-block;
+    letter-spacing: 0.5px;
+}
+
+/* Skipped badge */
+tbody.skipped .col-result,
+span.skipped {
+    background: var(--skip-yellow) !important;
+    color: var(--gray-900) !important;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    display: inline-block;
+    letter-spacing: 0.5px;
+}
+
+/* Error badge */
+tbody.error .col-result,
+span.error {
+    background: var(--error-orange) !important;
+    color: white !important;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    display: inline-block;
+    letter-spacing: 0.5px;
+}
+
+/* Summary section - card style stats */
+.summary {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 24px 0;
+    padding: 20px;
+    background: var(--gray-100);
+    border-radius: 8px;
+    border: 1px solid var(--gray-300);
+}
+
+.summary p {
+    margin: 0;
+    padding: 14px 20px;
+    background: var(--primary-white);
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    border: 2px solid var(--gray-300);
+}
+
+.summary .passed {
+    background: #D4EDDA !important;
+    color: #155724 !important;
+    border: 2px solid var(--pass-green) !important;
+    border-radius: 8px;
+    padding: 14px 20px;
+}
+
+.summary .failed {
+    background: #F8D7DA !important;
+    color: #721C24 !important;
+    border: 2px solid var(--fail-red) !important;
+    border-radius: 8px;
+    padding: 14px 20px;
+}
+
+.summary .skipped {
+    background: #FFF3CD !important;
+    color: #856404 !important;
+    border: 2px solid var(--skip-yellow) !important;
+    border-radius: 8px;
+    padding: 14px 20px;
+}
+
+.summary .error {
+    background: #FFE5D0 !important;
+    color: #8B4000 !important;
+    border: 2px solid var(--error-orange) !important;
+    border-radius: 8px;
+    padding: 14px 20px;
+}
+
+/* Duration column */
+.duration, .col-duration {
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--gray-500) !important;
+    background: var(--gray-100);
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* Links column */
+.col-links {
+    color: var(--accent-teal) !important;
+}
+
+/* Ensure all table cells have visible text */
+#results-table td {
+    color: var(--gray-900) !important;
+}
+
+/* Collapsible row styling - ensure text is visible */
+.results-table-row .collapsible td {
+    color: var(--gray-900) !important;
+}
+
+/* Test name styling */
+.test-name, .col-name, .col-testId {
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    word-break: break-all;
+    color: var(--gray-900) !important;
+}
+
+/* Ensure test ID column is visible */
+td.col-testId {
+    color: var(--gray-900) !important;
+    font-weight: 500;
+    max-width: 600px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Collapsible details - light background */
+.log, .extras {
+    background: var(--gray-100);
+    border: 2px solid var(--gray-300);
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 12px;
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    max-height: 400px;
+    overflow-y: auto;
+    color: var(--gray-900);
+}
+
+/* Collapsible ROW in results table (NOT a button) */
+tr.collapsible {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+tr.collapsible:hover {
+    background: var(--accent-teal-light) !important;
+}
+
+/* Ensure text in collapsible rows is visible */
+tr.collapsible td {
+    color: var(--gray-900) !important;
+}
+
+/* Collapsible toggle BUTTON (if used elsewhere) */
+button.collapsible {
+    cursor: pointer;
+    padding: 10px 16px;
+    background: var(--accent-teal);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-top: 8px;
+    transition: background 0.2s;
+}
+
+button.collapsible:hover {
+    background: #138496;
+}
+
+/* Links - teal for visibility */
+a {
+    color: var(--accent-teal);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+a:hover {
+    text-decoration: underline;
+    color: #138496;
+}
+
+/* Sort arrows in table headers */
+.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.sortable:hover {
+    background: var(--gray-700);
+}
+
+/* Media section for images */
+.media {
+    max-width: 100%;
+    margin: 8px 0;
+    border-radius: 4px;
+}
+
+/* Additional info box */
+.additional-info {
+    background: var(--accent-teal-light);
+    border-left: 5px solid var(--accent-teal);
+    padding: 16px 20px;
+    margin: 16px 0;
+    border-radius: 0 8px 8px 0;
+    color: var(--gray-900);
+}
+
+/* Count badges in summary (smaller style) */
+.summary span.passed,
+.summary span.failed,
+.summary span.skipped,
+.summary span.error {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 13px;
+    margin-left: 6px;
+}
+
+/* Filter buttons */
+button.filter {
+    padding: 10px 18px;
+    margin: 4px;
+    border: 2px solid var(--gray-300);
+    background: var(--primary-white);
+    border-radius: 25px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+    transition: all 0.2s;
+    color: var(--gray-700);
+}
+
+button.filter:hover {
+    border-color: var(--accent-teal);
+    color: var(--accent-teal);
+    background: var(--accent-teal-light);
+}
+
+button.filter.active {
+    background: var(--accent-teal);
+    border-color: var(--accent-teal);
+    color: white;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    
+    #container {
+        padding: 16px;
+        border-radius: 8px;
+    }
+    
+    #results-table {
+        font-size: 12px;
+    }
+    
+    #results-table th,
+    #results-table td {
+        padding: 10px 8px;
+    }
+    
+    .summary {
+        flex-direction: column;
+    }
+}
+
+/* Print styles */
+@media print {
+    body {
+        background: white;
+        padding: 0;
+    }
+    
+    #container {
+        box-shadow: none;
+        padding: 0;
+    }
+    
+    .collapsible {
+        display: none;
+    }
+}
