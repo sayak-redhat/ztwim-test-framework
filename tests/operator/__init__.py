@@ -1,2 +1,0 @@
-"""Operator validation tests."""
-

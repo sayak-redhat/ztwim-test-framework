@@ -23,9 +23,7 @@ dependencies = [
     "pytest-timeout>=2.2.0",
     "pytest-order>=1.2.0",
     
-    # Coverage & Better Reporting
-    "pytest-cov>=4.1.0",
-    "coverage[toml]>=7.3.0",
+    # Better Reporting
     "pytest-sugar>=1.0.0",
     
     # Kubernetes/OpenShift
@@ -64,7 +62,7 @@ dev = [
 ztwim-test = "src.cli:app"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/federation"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -75,18 +73,10 @@ addopts = [
     "-ra",
     "--self-contained-html",
     "--css=assets/pytest-html-style.css",
-    # Coverage - enabled by default
-    "--cov=src",
-    "--cov-report=term-missing:skip-covered",
-    # NOTE: HTML report is generated dynamically by conftest.py to test-reports/<timestamp>/coverage/
-    # Do NOT add --cov-report=html here (it would create htmlcov/ in project root)
 ]
 markers = [
-    "spire_server: Tests for SpireServer component",
-    "spire_agent: Tests for SpireAgent component",
-    "oidc_discovery: Tests for OIDC Discovery component",
-    "workload_identity: Tests for workload identity/SVID",
     "federation: Tests for cluster federation",
+    "acme_certmanager: Hybrid federation with cert-manager ACME and https_web",
     "slow: Marks tests as slow running",
     "destructive: Tests that modify cluster state significantly",
 ]
@@ -116,36 +106,4 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
-
-# =============================================================================
-# Coverage Configuration
-# =============================================================================
-[tool.coverage.run]
-source = ["src"]
-branch = true
-omit = [
-    "*/tests/*",
-    "*/__pycache__/*",
-    "*/conftest.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-]
-show_missing = true
-precision = 2
-
-[tool.coverage.html]
-# Directory is set dynamically by conftest.py to test-reports/<timestamp>/coverage/
-title = "ZTWIM Test Framework - Coverage Report"
-show_contexts = false
-
-[tool.coverage.json]
-output = "coverage.json"
-pretty_print = true
 

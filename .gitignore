@@ -1,76 +1,84 @@
-# Python
+# =========================
+# Python build/artifacts
+# =========================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
 sdist/
-var/
 wheels/
 *.egg-info/
-.installed.cfg
 *.egg
+.installed.cfg
 
+# =========================
 # Virtual environments
+# =========================
 .venv/
 venv/
 ENV/
 
-# IDE
+# =========================
+# Tooling caches
+# =========================
+.pytest_cache/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# Test/coverage outputs
+# =========================
+.coverage
+.coverage.*
+coverage.json
+coverage-report/
+htmlcov/
+
+# Federation report outputs
+test-reports/*/
+test-reports/latest
+!test-reports/.gitkeep
+
+# Generic report artifacts
+reports/*.xml
+reports/*.html
+!reports/.gitkeep
+
+# =========================
+# Logs
+# =========================
+logs/*.log
+!logs/.gitkeep
+
+# =========================
+# IDE / editor
+# =========================
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Claude CLI
-.claude/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# Coverage Reports
-coverage-report/
-.coverage
-.coverage.*
-coverage.json
-htmlcov/
-
-# Test Reports - Ignore timestamped run directories
-test-reports/*/
-test-reports/latest
-!test-reports/.gitkeep
-
-# Reports directory (CI artifacts)
-reports/*.xml
-reports/*.html
-!reports/.gitkeep
-
-# Logs
-logs/*.log
-!logs/.gitkeep
-
-# Environment
+# =========================
+# Local env/secrets
+# =========================
 .env
 *.env.local
-
-# Kubeconfig (never commit!)
 *.kubeconfig
 kubeconfig*
 
-# OS
+# =========================
+# OS files
+# =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Local agent directories
+# =========================
+.claude/
 

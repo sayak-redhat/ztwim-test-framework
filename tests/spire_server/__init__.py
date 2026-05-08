@@ -1,2 +1,0 @@
-"""SpireServer component tests."""
-

@@ -53,6 +53,7 @@ class OCPClient:
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
         self.custom_objects = client.CustomObjectsApi()
+        self.custom_objects_api = self.custom_objects  # alias for compatibility
         self.apiextensions_v1 = client.ApiextensionsV1Api()
         self.api_client = client.ApiClient()
         self.dynamic_client = DynamicClient(self.api_client)

@@ -1,3 +1,0 @@
-"""SPIFFE CSI Driver tests."""
-
-

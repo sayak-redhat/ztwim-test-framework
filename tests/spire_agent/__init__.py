@@ -1,2 +1,0 @@
-"""SpireAgent component tests."""
-

@@ -1,0 +1,9 @@
+# cert-manager OperatorGroup
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cert-manager-operator
+  namespace: {{CERT_MANAGER_OPERATOR_NAMESPACE}}
+spec:
+  targetNamespaces:
+    - {{CERT_MANAGER_OPERATOR_NAMESPACE}}

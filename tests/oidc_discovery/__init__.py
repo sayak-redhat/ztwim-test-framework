@@ -1,3 +1,0 @@
-"""OIDC Discovery Provider tests."""
-
-

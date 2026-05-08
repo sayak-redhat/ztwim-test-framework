@@ -1,0 +1,16 @@
+# Federation TLS certificate via cert-manager
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{CERT_SECRET_NAME}}
+  namespace: {{OPERATOR_NAMESPACE}}
+spec:
+  secretName: {{CERT_SECRET_NAME}}
+  commonName: federation.{{REMOTE_APP_DOMAIN}}
+  dnsNames:
+    - federation.{{REMOTE_APP_DOMAIN}}
+  usages:
+    - server auth
+  issuerRef:
+    kind: Issuer
+    name: letsencrypt-http01

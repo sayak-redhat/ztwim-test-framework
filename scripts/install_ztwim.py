@@ -16,10 +16,10 @@ Usage:
     python scripts/install_ztwim.py --skip-if-exists
 
 Environment Variables:
-    KUBECONFIG          - Path to kubeconfig file (required)
-    APP_DOMAIN          - OpenShift apps domain (optional, auto-detected)
+    KUBECONFIG - Path to kubeconfigFile (required)
+    APP_DOMAIN - OpenShift apps domain (optional, auto-detected)
     JWT_ISSUER_ENDPOINT - JWT issuer endpoint (optional, auto-derived)
-    CLUSTER_NAME        - ZTWIM cluster name (optional, default: test01)
+    CLUSTER_NAME - ZTWIM cluster name (optional, default: test01)
 
 Exit Codes:
     0 - Installation successful

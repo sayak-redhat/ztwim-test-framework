@@ -1,184 +1,69 @@
-# ZTWIM Test Framework - Cursor AI Rules
+# ZTWIM Federation Test Framework - Cursor Rules
 
-## Project Overview
-This is the **ZTWIM (Zero Trust Workload Identity Manager)** test framework for OpenShift.
-It validates the ZTWIM operator and its components using pytest.
+## Project Scope
 
-## Components
-- **operator** - The ZTWIM Operator itself
-- **spire_server** - SPIRE Server deployment
-- **spire_agent** - SPIRE Agent DaemonSet
-- **csi_driver** - SPIFFE CSI Driver
-- **oidc_discovery** - OIDC Discovery Provider
+This repository is dedicated to **federation testing only**.
 
-## Test Generation Guidelines
+- Active tests live under `tests/federation/`
+- Use marker: `@pytest.mark.federation`
+- Do not create non-federation component test files.
 
-### 1. Always Use Framework Logger
+## Test Authoring Guidelines
+
+### 1. Always use framework logger
+
 ```python
 from src.utils.logger import get_logger
 logger = get_logger(__name__)
 ```
 
-### 2. Follow Docstring Format (Acceptance Criteria)
+### 2. Use acceptance criteria docstrings
+
 ```python
-def test_component_behavior(self, ocp_client, operator_namespace):
+def test_behavior(self, ocp_client, operator_namespace):
     """
-    Test that component behaves correctly.
-    
+    Test description.
+
     Acceptance Criteria:
-    - GIVEN the component is deployed
-    - WHEN we perform some action
-    - THEN expected result occurs
+    - GIVEN ...
+    - WHEN ...
+    - THEN ...
     """
-    logger.info("Starting test...")
-    # Test implementation
-    logger.info("✅ Test passed")
 ```
 
-### 3. Use Component Markers
+### 3. Prefer configurable federation scenarios
+
+Federation settings should come from CLI/fixtures (not hardcoded), including:
+
+- federation profile
+- managed route toggle
+- workload images
+- timeout values
+
+### 4. Use existing fixtures
+
+Core fixtures:
+
+- `ocp_client`
+- `remote_ocp_client`
+- `operator_namespace`
+- `app_domain` / `remote_app_domain`
+- `federation_config`
+- `federation_helper`
+
+### 5. Keep assertions descriptive
+
 ```python
-@pytest.mark.spire_server
-class TestSpireServer:
-    pass
+assert result.success, "Expected cross-cluster mTLS handshake to succeed"
 ```
 
-Available markers:
-- `@pytest.mark.operator`
-- `@pytest.mark.spire_server`
-- `@pytest.mark.spire_agent`
-- `@pytest.mark.csi_driver`
-- `@pytest.mark.oidc_discovery`
+### 6. Running tests
 
-### 4. Available Fixtures
-
-**Session-scoped (created once):**
-- `ocp_client` - OpenShift/Kubernetes client
-- `operator_namespace` - ZTWIM operator namespace (default: zero-trust-workload-identity-manager)
-- `settings` - Framework settings from config/settings.yaml
-- `app_domain` - OpenShift apps domain (auto-detected)
-- `jwt_issuer_endpoint` - JWT issuer URL
-- `cluster_name` - ZTWIM cluster name
-
-**CRD Managers:**
-- `ztwim_manager` - ZeroTrustWorkloadIdentityManager CRD manager
-- `spire_server_manager` - SpireServer CRD manager
-- `spire_agent_manager` - SpireAgent CRD manager
-- `csi_driver_manager` - SpiffeCSIDriver CRD manager
-- `oidc_manager` - SpireOIDCDiscoveryProvider CRD manager
-
-**Module-scoped:**
-- `spire_server` - SpireServer CR object
-- `spire_agent` - SpireAgent CR object
-- `spiffe_csi_driver` - SpiffeCSIDriver CR object
-- `oidc_provider` - SpireOIDCDiscoveryProvider CR object
-- `test_namespace` - Creates ephemeral test namespace
-
-**Function-scoped:**
-- `unique_name` - Generates unique name for resources
-- `test_labels` - Standard labels for test resources
-- `wait_timeout` - Default timeout value
-- `poll_interval` - Default poll interval
-
-### 5. Common OCP Client Methods
-```python
-# Get pods
-pods = ocp_client.get_pods(namespace="ns", label_selector="app=name")
-
-# Wait for pods ready
-pods = ocp_client.wait_for_pods_ready(
-    namespace="ns",
-    label_selector="app=name",
-    expected_count=1,
-    timeout=120
-)
-
-# Get pod logs
-logs = ocp_client.get_pod_logs(name="pod", namespace="ns", container="main")
-
-# List resources
-sts_list = ocp_client.apps_v1.list_namespaced_stateful_set(namespace="ns")
-svc_list = ocp_client.core_v1.list_namespaced_service(namespace="ns")
-```
-
-### 6. Test File Structure
-```python
-"""
-Module docstring explaining what these tests cover.
-
-Generated from: PR #123 or Jira STORY-456
-Component: spire_server
-"""
-
-import pytest
-from src.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-
-@pytest.mark.spire_server
-class TestSpireServerFeature:
-    """Tests for SpireServer feature XYZ."""
-    
-    def test_positive_case(self, spire_server, ocp_client):
-        """Positive test case."""
-        pass
-    
-    def test_edge_case(self, spire_server):
-        """Edge case test."""
-        pass
-```
-
-### 7. Descriptive Assertions
-```python
-# Good
-assert len(pods) > 0, "No pods found for SpireServer component"
-assert status == "Ready", f"Expected status 'Ready', got '{status}'"
-
-# Bad
-assert pods
-assert status == "Ready"
-```
-
-### 8. Logging Best Practices
-```python
-logger.info("Verifying SpireServer pods are ready")
-logger.info(f"Found {len(pods)} pods")
-logger.info(f"✅ SpireServer verification passed")
-logger.warning(f"Unexpected state: {state}")
-logger.error(f"Failed to verify: {error}")
-```
-
-## PR Task Files
-When asked to generate tests from a PR, check `.cursor-tasks/pr_*.md` for:
-- PR description and context
-- Files changed and diff
-- Detected component
-- Target output file path
-- Framework fixtures reference
-
-## File Locations
-```
-tests/
-├── operator/           # Operator installation tests
-├── spire_server/       # SpireServer tests
-├── spire_agent/        # SpireAgent tests
-├── csi_driver/         # CSI Driver tests
-├── oidc_discovery/     # OIDC Discovery tests
-└── workload_identity/  # Workload identity tests
-```
-
-## Running Tests
 ```bash
-# Run all tests
-pytest tests/ -v
+# Federation suite only
+pytest tests/federation/ -v
 
-# Run specific component
-pytest tests/spire_server/ -v
-
-# Run with marker
-pytest -m spire_server -v
-
-# Skip installation (if already deployed)
-pytest tests/ --skip-install -v
+# Bare clusters
+pytest tests/federation/ -v --deployment-mode=bootstrap --keep-deployed \
+  --remote-kubeconfig=/path/to/remote/kubeconfig
 ```
-
