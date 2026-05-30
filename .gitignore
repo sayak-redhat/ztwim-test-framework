@@ -82,3 +82,7 @@ Thumbs.db
 # =========================
 .claude/
 
+# Local documentation (not for remote)
+# =====================================
+docs/
+

@@ -47,8 +47,8 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
         
         logger.addHandler(rich_handler)
         
-        # Prevent propagation to root logger
-        logger.propagate = False
+        # Allow propagation so pytest's log_file handler captures logs
+        logger.propagate = True
     
     return logger
 

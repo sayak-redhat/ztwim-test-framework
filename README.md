@@ -427,7 +427,6 @@ ls test-reports/
 .
 ├── config/
 │   └── settings.yaml        # All tunable settings (timeouts, polling, etc.)
-├── docs/                    # Additional documentation
 ├── src/
 │   ├── ocp_client/
 │   │   ├── client.py       # OCPClient (K8s API wrapper)
