@@ -25,20 +25,20 @@ Prerequisites:
     - Network connectivity between clusters (federation routes accessible)
 
 Usage:
-    # Operator-only clusters are supported (operands auto-deployed)
+    # Operator pre-installed on both clusters (operands auto-deployed)
     pytest tests/federation/ -v \\
-        --deployment-mode=operands-only \\
+        --deployment-mode=operator-only \\
         --keep-deployed \\
         --remote-kubeconfig=/path/to/cluster2/kubeconfig
 
-    # Both clusters already have ZTWIM deployed
+    # Bare clusters: install operator + operands
     pytest tests/federation/ -v \\
-        --deployment-mode=existing --keep-deployed \\
+        --deployment-mode=bootstrap --keep-deployed \\
         --remote-kubeconfig=/path/to/cluster2/kubeconfig
 
     # With explicit domains
     pytest tests/federation/ -v \\
-        --deployment-mode=existing --keep-deployed \\
+        --deployment-mode=operator-only --keep-deployed \\
         --remote-kubeconfig=/path/to/cluster2/kubeconfig \\
         --app-domain=apps.cluster1.example.com \\
         --remote-app-domain=apps.cluster2.example.com
@@ -52,6 +52,7 @@ import time
 
 import pytest
 
+from src.utils.config import get_settings
 from src.utils.logger import get_logger
 from src.utils.polling import wait_until
 
@@ -66,6 +67,7 @@ class TestFederationPrerequisites:
 
     These tests ensure the ZTWIM stack is properly deployed on both clusters
     before attempting federation configuration.
+    Timeouts are read from config/settings.yaml -> polling.pod_readiness.
     """
 
     def test_local_spire_server_running(self, ocp_client, operator_namespace):
@@ -78,11 +80,12 @@ class TestFederationPrerequisites:
         - THEN at least one pod is in Ready state
         """
         logger.info("Checking SpireServer pods on local cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
             label_selector="app.kubernetes.io/name=spire-server",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready SpireServer pods on local cluster"
         logger.info(f"Local SpireServer: {pods[0]['metadata']['name']} is Ready")
@@ -99,11 +102,12 @@ class TestFederationPrerequisites:
         - THEN at least one pod is in Ready state
         """
         logger.info("Checking SpireServer pods on remote cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = remote_ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
             label_selector="app.kubernetes.io/name=spire-server",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready SpireServer pods on remote cluster"
         logger.info(f"Remote SpireServer: {pods[0]['metadata']['name']} is Ready")
@@ -118,11 +122,12 @@ class TestFederationPrerequisites:
         - THEN at least one agent pod is in Ready state
         """
         logger.info("Checking SpireAgent pods on local cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
             label_selector="app.kubernetes.io/name=spire-agent",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready SpireAgent pods on local cluster"
         logger.info(f"Local SpireAgent: {len(pods)} pod(s) running")
@@ -139,11 +144,12 @@ class TestFederationPrerequisites:
         - THEN at least one agent pod is in Ready state
         """
         logger.info("Checking SpireAgent pods on remote cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = remote_ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
             label_selector="app.kubernetes.io/name=spire-agent",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready SpireAgent pods on remote cluster"
         logger.info(f"Remote SpireAgent: {len(pods)} pod(s) running")
@@ -158,11 +164,12 @@ class TestFederationPrerequisites:
         - THEN at least one CSI driver pod is in Ready state
         """
         logger.info("Checking SPIFFE CSI Driver on local cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
-            label_selector="app.kubernetes.io/name=spire-spiffe-csi-driver",
+            label_selector="app.kubernetes.io/name=spiffe-csi-driver",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready CSI Driver pods on local cluster"
         logger.info(f"Local CSI Driver: {len(pods)} pod(s) running")
@@ -179,11 +186,12 @@ class TestFederationPrerequisites:
         - THEN at least one CSI driver pod is in Ready state
         """
         logger.info("Checking SPIFFE CSI Driver on remote cluster")
+        cfg = get_settings().polling.pod_readiness
         pods = remote_ocp_client.wait_for_pods_ready(
             namespace=operator_namespace,
-            label_selector="app.kubernetes.io/name=spire-spiffe-csi-driver",
+            label_selector="app.kubernetes.io/name=spiffe-csi-driver",
             expected_count=1,
-            timeout=60,
+            timeout=int(cfg.timeout),
         )
         assert len(pods) >= 1, "No ready CSI Driver pods on remote cluster"
         logger.info(f"Remote CSI Driver: {len(pods)} pod(s) running")
@@ -318,7 +326,39 @@ class TestFederationConfiguration:
         assert "federation" in host, f"Unexpected route host: {host}"
         logger.info(f"Remote federation route ready: {host}")
 
-    def test_fetch_local_trust_bundle(self, federation_helper, ocp_client):
+    def test_spire_servers_ready_after_federation(
+        self, ocp_client, remote_ocp_client, operator_namespace
+    ):
+        """
+        Wait for SpireServer pods to be ready after federation patching.
+
+        Acceptance Criteria:
+        - GIVEN federation was just enabled on both SpireServer CRs
+        - WHEN the operator reconciles and restarts the pods
+        - THEN both spire-server pods return to Ready state
+        """
+        logger.info("Waiting for SpireServer pods to stabilize after federation config change")
+        cfg = get_settings().polling.pod_readiness
+
+        ocp_client.wait_for_pods_ready(
+            namespace=operator_namespace,
+            label_selector="app.kubernetes.io/name=spire-server",
+            expected_count=1,
+            timeout=int(cfg.timeout),
+        )
+        logger.info("Local SpireServer pod ready")
+
+        remote_ocp_client.wait_for_pods_ready(
+            namespace=operator_namespace,
+            label_selector="app.kubernetes.io/name=spire-server",
+            expected_count=1,
+            timeout=int(cfg.timeout),
+        )
+        logger.info("Remote SpireServer pod ready")
+
+    def test_fetch_local_trust_bundle(
+        self, federation_helper, ocp_client, federation_timeout
+    ):
         """
         Fetch the trust bundle from the local cluster's SPIRE server.
 
@@ -328,20 +368,38 @@ class TestFederationConfiguration:
         - THEN a valid SPIFFE bundle (JWKS format) is returned
         """
         logger.info("Fetching trust bundle from local cluster")
-        bundle = federation_helper.fetch_trust_bundle_via_exec(ocp_client)
 
-        assert bundle, "Empty trust bundle returned from local cluster"
-        bundle_data = json.loads(bundle)
-        keys = bundle_data.get("keys", [])
-        assert len(keys) >= 1, (
-            f"Expected at least 1 key in trust bundle, got {len(keys)}"
+        def _fetch_valid_bundle():
+            try:
+                bundle = federation_helper.fetch_trust_bundle_via_exec(ocp_client)
+                if not bundle:
+                    logger.warning("Bundle fetch returned empty output")
+                    return None
+                bundle_data = json.loads(bundle)
+                keys = bundle_data.get("keys", [])
+                if len(keys) >= 1:
+                    return bundle_data
+                logger.warning(f"Bundle has no keys yet: {bundle[:200]}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Bundle not valid JSON: {e} — raw: {bundle[:200] if bundle else '(empty)'}")
+            except Exception as e:
+                logger.warning(f"Bundle fetch error: {type(e).__name__}: {e}")
+            return None
+
+        result = wait_until(
+            _fetch_valid_bundle,
+            message="Local trust bundle ready",
+            timeout=federation_timeout,
+            interval=10,
+            backoff=1.0,
         )
+        assert result.success, "Failed to fetch valid trust bundle from local cluster"
         logger.info(
-            f"Local trust bundle fetched: {len(keys)} key(s)"
+            f"Local trust bundle fetched: {len(result.value.get('keys', []))} key(s)"
         )
 
     def test_fetch_remote_trust_bundle(
-        self, federation_helper, remote_ocp_client
+        self, federation_helper, remote_ocp_client, federation_timeout
     ):
         """
         Fetch the trust bundle from the remote cluster's SPIRE server.
@@ -352,16 +410,34 @@ class TestFederationConfiguration:
         - THEN a valid SPIFFE bundle (JWKS format) is returned
         """
         logger.info("Fetching trust bundle from remote cluster")
-        bundle = federation_helper.fetch_trust_bundle_via_exec(remote_ocp_client)
 
-        assert bundle, "Empty trust bundle returned from remote cluster"
-        bundle_data = json.loads(bundle)
-        keys = bundle_data.get("keys", [])
-        assert len(keys) >= 1, (
-            f"Expected at least 1 key in trust bundle, got {len(keys)}"
+        def _fetch_valid_bundle():
+            try:
+                bundle = federation_helper.fetch_trust_bundle_via_exec(remote_ocp_client)
+                if not bundle:
+                    logger.warning("Bundle fetch returned empty output")
+                    return None
+                bundle_data = json.loads(bundle)
+                keys = bundle_data.get("keys", [])
+                if len(keys) >= 1:
+                    return bundle_data
+                logger.warning(f"Bundle has no keys yet: {bundle[:200]}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Bundle not valid JSON: {e} — raw: {bundle[:200] if bundle else '(empty)'}")
+            except Exception as e:
+                logger.warning(f"Bundle fetch error: {type(e).__name__}: {e}")
+            return None
+
+        result = wait_until(
+            _fetch_valid_bundle,
+            message="Remote trust bundle ready",
+            timeout=federation_timeout,
+            interval=10,
+            backoff=1.0,
         )
+        assert result.success, "Failed to fetch valid trust bundle from remote cluster"
         logger.info(
-            f"Remote trust bundle fetched: {len(keys)} key(s)"
+            f"Remote trust bundle fetched: {len(result.value.get('keys', []))} key(s)"
         )
 
 
@@ -375,7 +451,7 @@ class TestTrustBootstrap:
     providing the other cluster's trust bundle for initial trust establishment.
     """
 
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope="class")
     def _setup_trust_domains(
         self,
         federation_helper,
@@ -384,26 +460,24 @@ class TestTrustBootstrap:
         local_app_domain,
         remote_app_domain,
         skip_cleanup,
-        request,
     ):
-        """Setup and teardown for trust domain resources."""
-        self._helper = federation_helper
-        self._local_client = ocp_client
-        self._remote_client = remote_ocp_client
-        self._local_domain = local_app_domain
-        self._remote_domain = remote_app_domain
-        self._cfdt_local_name = "federation-to-remote"
-        self._cfdt_remote_name = "federation-to-local"
+        """Setup and teardown for trust domain resources (class-scoped)."""
+        self.__class__._helper = federation_helper
+        self.__class__._local_client = ocp_client
+        self.__class__._remote_client = remote_ocp_client
+        self.__class__._local_domain = local_app_domain
+        self.__class__._remote_domain = remote_app_domain
+        self.__class__._cfdt_local_name = "federation-to-remote"
+        self.__class__._cfdt_remote_name = "federation-to-local"
+        self.__class__._created_cfdts = set()
 
         yield
 
         if not skip_cleanup:
-            federation_helper.delete_cluster_federated_trust_domain(
-                ocp_client, self._cfdt_local_name
-            )
-            federation_helper.delete_cluster_federated_trust_domain(
-                remote_ocp_client, self._cfdt_remote_name
-            )
+            for cfdt_key in list(self._created_cfdts):
+                client, name = cfdt_key
+                target = ocp_client if client == "local" else remote_ocp_client
+                federation_helper.delete_cluster_federated_trust_domain(target, name)
 
     def test_create_cfdt_on_local_cluster(self):
         """
@@ -431,6 +505,7 @@ class TestTrustBootstrap:
 
         assert result["metadata"]["name"] == self._cfdt_local_name
         assert result["spec"]["trustDomain"] == self._remote_domain
+        self._created_cfdts.add(("local", self._cfdt_local_name))
         logger.info(
             f"CFDT created on local cluster: trust {self._remote_domain}"
         )
@@ -461,6 +536,7 @@ class TestTrustBootstrap:
 
         assert result["metadata"]["name"] == self._cfdt_remote_name
         assert result["spec"]["trustDomain"] == self._local_domain
+        self._created_cfdts.add(("remote", self._cfdt_remote_name))
         logger.info(
             f"CFDT created on remote cluster: trust {self._local_domain}"
         )
@@ -485,6 +561,7 @@ class TestTrustBootstrap:
             message=f"Remote bundle ({self._remote_domain}) synced to local",
             timeout=federation_timeout,
             interval=10,
+            backoff=1.0,
         )
         assert result.success, (
             f"Remote trust domain '{self._remote_domain}' not found in local "
@@ -514,6 +591,7 @@ class TestTrustBootstrap:
             message=f"Local bundle ({self._local_domain}) synced to remote",
             timeout=federation_timeout,
             interval=10,
+            backoff=1.0,
         )
         assert result.success, (
             f"Local trust domain '{self._local_domain}' not found in remote "
@@ -535,7 +613,7 @@ class TestMTLSWorkloads:
     using SPIFFE SVIDs from the federated trust domains.
     """
 
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope="class")
     def _setup_workloads(
         self,
         federation_helper,
@@ -548,29 +626,28 @@ class TestMTLSWorkloads:
         skip_cleanup,
         mtls_timeout,
     ):
-        """Setup workload resources for mTLS testing."""
-        self._helper = federation_helper
-        self._local_client = ocp_client
-        self._remote_client = remote_ocp_client
-        self._local_domain = local_app_domain
-        self._remote_domain = remote_app_domain
-        self._namespace = operator_namespace
-        self._server_ns = federation_namespaces["server"]
-        self._client_ns = federation_namespaces["client"]
-        self._skip_cleanup = skip_cleanup
-        self._mtls_timeout = mtls_timeout
-        self._server_spiffeid_name = f"mtls-server-{self._server_ns[-6:]}"
-        self._client_spiffeid_name = f"mtls-client-{self._client_ns[-6:]}"
+        """Setup workload resources for mTLS testing (class-scoped)."""
+        self.__class__._helper = federation_helper
+        self.__class__._local_client = ocp_client
+        self.__class__._remote_client = remote_ocp_client
+        self.__class__._local_domain = local_app_domain
+        self.__class__._remote_domain = remote_app_domain
+        self.__class__._namespace = operator_namespace
+        self.__class__._server_ns = federation_namespaces["server"]
+        self.__class__._client_ns = federation_namespaces["client"]
+        self.__class__._skip_cleanup = skip_cleanup
+        self.__class__._mtls_timeout = mtls_timeout
+        self.__class__._server_spiffeid_name = f"mtls-server-{self._server_ns[-6:]}"
+        self.__class__._client_spiffeid_name = f"mtls-client-{self._client_ns[-6:]}"
+        self.__class__._created_spiffeids = set()
 
         yield
 
         if not skip_cleanup:
-            federation_helper.delete_cluster_spiffe_id(
-                ocp_client, self._server_spiffeid_name
-            )
-            federation_helper.delete_cluster_spiffe_id(
-                remote_ocp_client, self._client_spiffeid_name
-            )
+            for sid_key in list(self._created_spiffeids):
+                client, name = sid_key
+                target = ocp_client if client == "local" else remote_ocp_client
+                federation_helper.delete_cluster_spiffe_id(target, name)
 
     def test_create_server_spiffeid(self):
         """
@@ -593,6 +670,7 @@ class TestMTLSWorkloads:
 
         assert result["metadata"]["name"] == self._server_spiffeid_name
         assert self._remote_domain in result["spec"]["federatesWith"]
+        self._created_spiffeids.add(("local", self._server_spiffeid_name))
         logger.info(
             f"Server ClusterSPIFFEID created (federatesWith: {self._remote_domain})"
         )
@@ -618,6 +696,7 @@ class TestMTLSWorkloads:
 
         assert result["metadata"]["name"] == self._client_spiffeid_name
         assert self._local_domain in result["spec"]["federatesWith"]
+        self._created_spiffeids.add(("remote", self._client_spiffeid_name))
         logger.info(
             f"Client ClusterSPIFFEID created (federatesWith: {self._local_domain})"
         )
@@ -712,6 +791,7 @@ class TestMTLSWorkloads:
             message="Server SVID files ready",
             timeout=self._mtls_timeout,
             interval=10,
+            backoff=1.0,
         )
         assert result.success, "SVID files not found on mTLS server pod"
         logger.info("Server SVID files verified: svid.pem, svid_key.pem, bundle.pem")
@@ -744,6 +824,7 @@ class TestMTLSWorkloads:
             message="Client SVID files ready",
             timeout=self._mtls_timeout,
             interval=10,
+            backoff=1.0,
         )
         assert result.success, "SVID files not found on mTLS client pod"
         logger.info("Client SVID files verified: svid.pem, svid_key.pem, bundle.pem")
@@ -946,6 +1027,7 @@ class TestCrossClusterMTLS:
             message="mTLS connection to remote server",
             timeout=self._mtls_timeout,
             interval=15,
+            backoff=1.0,
         )
 
         assert result.success, (

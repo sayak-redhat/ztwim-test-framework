@@ -188,7 +188,7 @@ class OCPClient:
         namespace: str,
         label_selector: str,
         expected_count: int = 1,
-        timeout: int = 300
+        timeout: int = None
     ) -> List[Dict[str, Any]]:
         """
         Wait for pods matching selector to be ready.
@@ -197,13 +197,17 @@ class OCPClient:
             namespace: Namespace name
             label_selector: Label selector
             expected_count: Expected number of ready pods
-            timeout: Timeout in seconds
+            timeout: Timeout in seconds (defaults to settings.polling.pod_readiness.timeout)
         
         Returns:
             List of ready pod objects
         """
+        if timeout is None:
+            timeout = int(self.settings.polling.pod_readiness.timeout)
+        poll_interval = self.settings.polling.pod_readiness.interval
+        
         start_time = time.time()
-        poll_interval = self.settings.testing.poll_interval
+        ready_pods = []
         
         while time.time() - start_time < timeout:
             pods = self.get_pods(namespace, label_selector)
@@ -283,6 +287,50 @@ class OCPClient:
             tty=False
         )
         return resp
+
+    def exec_in_pod_with_retry(
+        self,
+        name: str,
+        namespace: str,
+        command: List[str],
+        container: Optional[str] = None
+    ) -> str:
+        """
+        Execute a command in a pod with configurable retry logic.
+
+        Retries on transient errors (container not found, 500 status) using
+        settings from config/settings.yaml -> polling.exec_retry.
+
+        Args:
+            name: Pod name
+            namespace: Namespace
+            command: Command to execute
+            container: Container name (optional)
+
+        Returns:
+            Command output
+        """
+        from src.utils.polling import retry_on_error
+
+        cfg = self.settings.polling.exec_retry
+        logger.debug(
+            f"exec_in_pod_with_retry: pod={name}, container={container}, "
+            f"max_attempts={cfg.max_attempts}, interval={cfg.interval}s"
+        )
+
+        try:
+            from websocket import WebSocketBadStatusException
+            retryable_exceptions = (WebSocketBadStatusException, ApiException, RuntimeError)
+        except ImportError:
+            retryable_exceptions = (ApiException, RuntimeError)
+
+        return retry_on_error(
+            func=lambda: self.exec_in_pod(name, namespace, command, container),
+            max_attempts=cfg.max_attempts,
+            delay=cfg.interval,
+            backoff=cfg.backoff_factor,
+            exceptions=retryable_exceptions,
+        )
     
     # ==================== CRD Operations ====================
     

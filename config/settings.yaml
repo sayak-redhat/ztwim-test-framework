@@ -4,102 +4,81 @@
 # OpenShift Cluster Configuration
 # --------------------------------
 # KUBECONFIG can be provided via:
-#   1. Environment variable: export KUBECONFIG=/path/to/kubeconfig
-#   2. CLI argument: ztwim-test --kubeconfig /path/to/kubeconfig
+#   1. CLI argument: --kubeconfig /path/to/kubeconfig
+#   2. Environment variable: export KUBECONFIG=/path/to/kubeconfig
 #   3. Config file below (lowest priority)
 
 openshift:
-  # Kubeconfig path - will be set as KUBECONFIG env var
   kubeconfig: "${KUBECONFIG}"
-  
-  # Cluster API URL (optional, auto-detected from kubeconfig)
-  api_url: "${OPENSHIFT_API_URL}"
-  
-  # OpenShift token (optional, for token-based auth)
-  token: "${OPENSHIFT_TOKEN}"
-  
-  # ZTWIM operator namespace (where operator is installed)
   operator_namespace: "zero-trust-workload-identity-manager"
-  
-  # Test namespace prefix (tests will create: {prefix}-{random})
-  test_namespace_prefix: "ztwim-test"
-  
-  # Cleanup test resources after tests
-  cleanup_after_tests: true
 
 # ZTWIM Operator Installation Settings
+# Used by --deployment-mode=bootstrap and operand deployment
 ztwim:
-  # Catalog source name for operator subscription
-  # Will use: 1) CLI arg, 2) CATALOG_NAME env var, 3) this value, 4) "redhat-operators"
   catalog_name: "redhat-operators"
-  
-  # Subscription channel
   channel: "stable-v1"
-  
-  # Cluster name for ZTWIM manager
   cluster_name: "${CLUSTER_NAME:-test01}"
-  
-  # Apps domain (auto-detected if not set)
-  # export APP_DOMAIN=apps.$(oc get dns cluster -o jsonpath='{ .spec.baseDomain }')
-  app_domain: "${APP_DOMAIN}"
-  
-  # JWT Issuer endpoint
-  # export JWT_ISSUER_ENDPOINT=oidc-discovery.${APP_DOMAIN}
-  jwt_issuer_endpoint: "${JWT_ISSUER_ENDPOINT}"
 
-# SPIRE Component Settings (operator.openshift.io/v1alpha1)
-spire:
-  # SpireServer defaults
-  server:
-    # CA Subject configuration
-    ca_subject:
-      common_name: ""  # Uses APP_DOMAIN if empty
-      country: "US"
-      organization: "RH"
-    # Persistence settings
-    persistence:
-      type: "pvc"
-      size: "1Gi"
-      access_mode: "ReadWriteOncePod"
-    # Datastore settings
-    datastore:
-      database_type: "sqlite3"
-      connection_string: "/run/spire/data/datastore.sqlite3"
-      max_open_conns: 100
-      max_idle_conns: 2
-      conn_max_lifetime: 3600
-  
-  # SpireAgent defaults
-  agent:
-    node_attestor:
-      k8s_psat_enabled: "true"
-    workload_attestors:
-      k8s_enabled: "true"
-      verification_type: "auto"
-  
-  # SpiffeCSIDriver defaults
-  csi_driver:
-    enabled: true
-  
-  # SpireOIDCDiscoveryProvider defaults
-  oidc:
-    enabled: true
+  # Apps domain (auto-detected from cluster DNS if not set)
+  app_domain: "${APP_DOMAIN}"
+
+  # JWT Issuer endpoint (derived from app_domain if not set)
+  jwt_issuer_endpoint: "${JWT_ISSUER_ENDPOINT}"
 
 # Test Execution Settings
 testing:
-  # Default timeout for waiting operations (seconds)
-  default_timeout: 300
-  
-  # Polling interval for status checks (seconds)
+  # Polling interval for status checks in client.py (seconds)
   poll_interval: 5
-  
-  # Retry count for flaky operations
-  retry_count: 3
-  
-  # Parallel test workers (0 = auto)
-  workers: 0
+
+# Dynamic Polling / Retry Configuration
+# ======================================
+# Each category can be tuned independently.
+# Increase timeouts for slow clusters; decrease intervals for faster feedback.
+
+polling:
+  # Retry config for exec_in_pod operations (container not found, 500 errors)
+  exec_retry:
+    max_attempts: 6
+    interval: 10
+    backoff_factor: 1.0
+
+  # Pod readiness checks (prerequisite tests, deploy waits)
+  pod_readiness:
+    timeout: 180
+    interval: 10
+    backoff_factor: 1.2
+
+  # Component verification (SpireServer/Agent/CSI/OIDC StatefulSet/DaemonSet)
+  component_verify:
+    timeout: 120
+    interval: 5
+    backoff_factor: 1.5
+
+  # Federation-specific operations (route, bundle sync, mTLS)
+  federation:
+    timeout: 300
+    interval: 10
+    backoff_factor: 1.5
+
+  # Operator readiness (CSV installed, deployment available)
+  operator:
+    timeout: 300
+    interval: 10
+    backoff_factor: 1.5
+
+  # Cleanup / deletion waits
+  cleanup:
+    timeout: 180
+    interval: 5
+    backoff_factor: 1.0
 
 # Logging
 logging:
   level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Suppress noisy third-party loggers that dump huge API responses at DEBUG level.
+  # Format: logger_name: LEVEL
+  # Remove an entry or set to "DEBUG" to see its full output.
+  suppressed_loggers:
+    kubernetes.client.rest: "WARNING"
+    urllib3: "WARNING"

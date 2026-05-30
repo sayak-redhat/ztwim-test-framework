@@ -76,7 +76,6 @@ addopts = [
 ]
 markers = [
     "federation: Tests for cluster federation",
-    "acme_certmanager: Hybrid federation with cert-manager ACME and https_web",
     "slow: Marks tests as slow running",
     "destructive: Tests that modify cluster state significantly",
 ]

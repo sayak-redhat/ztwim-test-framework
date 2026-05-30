@@ -6,7 +6,7 @@ Handles loading settings and setting KUBECONFIG environment variable.
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -67,10 +67,49 @@ class TestingConfig(BaseModel):
     workers: int = 0
 
 
+class RetrySettings(BaseModel):
+    """Retry settings for operations that may transiently fail (e.g. exec_in_pod)."""
+    max_attempts: int = 6
+    interval: float = 10.0
+    backoff_factor: float = 1.0
+
+
+class PollSettings(BaseModel):
+    """Poll settings for waiting on state transitions (e.g. pod readiness)."""
+    timeout: float = 300.0
+    interval: float = 10.0
+    backoff_factor: float = 1.5
+
+
+class PollingConfig(BaseModel):
+    """Centralized polling/retry configuration for all wait operations."""
+    exec_retry: RetrySettings = Field(default_factory=RetrySettings)
+    pod_readiness: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=180, interval=10, backoff_factor=1.2)
+    )
+    component_verify: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=120, interval=5, backoff_factor=1.5)
+    )
+    federation: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=300, interval=10, backoff_factor=1.5)
+    )
+    operator: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=300, interval=10, backoff_factor=1.5)
+    )
+    cleanup: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=180, interval=5, backoff_factor=1.0)
+    )
+
+
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     level: str = "INFO"
-    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    suppressed_loggers: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "kubernetes.client.rest": "WARNING",
+            "urllib3": "WARNING",
+        }
+    )
 
 
 class Settings(BaseSettings):
@@ -80,6 +119,7 @@ class Settings(BaseSettings):
     ztwim: ZTWIMConfig = Field(default_factory=ZTWIMConfig)
     spire: SpireConfig = Field(default_factory=SpireConfig)
     testing: TestingConfig = Field(default_factory=TestingConfig)
+    polling: PollingConfig = Field(default_factory=PollingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     class Config:

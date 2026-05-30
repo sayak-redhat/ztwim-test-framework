@@ -14,14 +14,16 @@ Required environment variables or CLI options:
 Usage:
     # Operator pre-installed on both clusters, operands auto-deployed:
     pytest tests/federation/ -v \
+        --deployment-mode=operator-only \
         --remote-kubeconfig=/path/to/remote/kubeconfig
 
-    # Everything already deployed (verify-only mode):
+    # Bare clusters (install operator + operands):
     pytest tests/federation/ -v \
         --remote-kubeconfig=/path/to/remote/kubeconfig \
-        --use-existing-deployment --keep-deployed
+        --deployment-mode=bootstrap --keep-deployed
 """
 
+import logging
 import os
 import json
 import time
@@ -30,6 +32,12 @@ from dataclasses import dataclass
 from typing import Dict, Any, Generator, Optional
 
 import pytest
+from kubernetes.client import ApiException
+
+from src.utils.config import get_settings
+
+for _logger_name, _level in get_settings().logging.suppressed_loggers.items():
+    logging.getLogger(_logger_name).setLevel(getattr(logging, _level.upper(), logging.WARNING))
 
 from src.ocp_client.client import OCPClient
 from src.ocp_client.spire_crds import (
@@ -92,11 +100,11 @@ def pytest_addoption(parser):
     parser.addoption(
         "--deployment-mode",
         action="store",
-        choices=["existing", "operands-only", "bootstrap"],
-        default="operands-only",
+        choices=["operator-only", "bootstrap"],
+        default="operator-only",
         help=(
-            "Cluster lifecycle mode: existing=verify only, "
-            "operands-only=deploy missing operands, bootstrap=install operator+operands"
+            "Cluster lifecycle mode: operator-only=operator must be present, "
+            "deploy/repair operands; bootstrap=install operator+operands"
         ),
     )
     parser.addoption(
@@ -106,7 +114,7 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help=(
-            "Assume operator+operands already exist and only verify health "
+            "Deprecated and no longer supported "
             "(legacy alias: --skip-install)"
         ),
     )
@@ -470,13 +478,11 @@ def _resolve_deployment_mode(request) -> str:
     use_existing = request.config.getoption("use_existing_deployment")
     bootstrap = request.config.getoption("bootstrap_clusters")
 
-    if use_existing and bootstrap:
-        pytest.fail(
-            "Conflicting flags: --use-existing-deployment and --bootstrap-clusters. "
-            "Use a single --deployment-mode value."
-        )
     if use_existing:
-        return "existing"
+        pytest.fail(
+            "--use-existing-deployment / --skip-install is no longer supported. "
+            "Use --deployment-mode=operator-only or --deployment-mode=bootstrap."
+        )
     if bootstrap:
         return "bootstrap"
     return mode
@@ -489,31 +495,43 @@ def ensure_spire_stack_deployed(
     """
     Ensure the ZTWIM operator and SPIRE stack are deployed on both clusters.
 
-    Supports three modes:
+    Supports two modes:
 
-    1. --deployment-mode=existing: Assumes everything (operator + operands) is
-       deployed.
-       Just verifies health on both clusters.
+    1. --deployment-mode=operator-only (default): Requires operator to be
+       pre-installed and ready, then auto-deploys/repairs operands.
 
-    2. --deployment-mode=operands-only (default): Assumes operator is pre-installed.
-       Auto-deploys operands (SpireServer, SpireAgent, etc.) if not present.
-
-    3. --deployment-mode=bootstrap: Clusters are completely bare.
-       Installs the operator AND deploys operands on both clusters.
+    2. --deployment-mode=bootstrap: Clusters are completely bare.
+       Installs the operator and deploys operands on both clusters.
     """
     deployment_mode = _resolve_deployment_mode(request)
     keep_deployed = request.config.getoption("keep_deployed")
+    cleanup_only = request.config.getoption("cleanup_only_mode")
 
-    # ── Mode 1: Skip install (everything pre-deployed) ──────────────────────
-    if deployment_mode == "existing":
-        logger.info("Skipping all installation (--deployment-mode=existing)")
-        logger.info("Verifying existing deployments on both clusters...")
-        _verify_stack(ocp_client, "local")
-        _verify_stack(remote_ocp_client, "remote")
-        yield
-        return
+    # ── Cleanup-only mode: wipe everything and skip tests ──────────────────
+    if cleanup_only:
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("CLEANUP-ONLY MODE: Removing ALL resources on both clusters")
+        logger.info("=" * 60)
 
-    # ── Mode 3: Full install (operator + operands from bare cluster) ────────
+        _cleanup_federation_resources(ocp_client, "local")
+        _cleanup_federation_resources(remote_ocp_client, "remote")
+        _cleanup_test_namespaces(ocp_client, remote_ocp_client)
+
+        if deployment_mode == "bootstrap":
+            _full_uninstall(ocp_client, "local")
+            _full_uninstall(remote_ocp_client, "remote")
+        else:
+            _cleanup_operands(ocp_client, "local")
+            _cleanup_operands(remote_ocp_client, "remote")
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("CLEANUP COMPLETE - clusters are ready for a fresh test run")
+        logger.info("=" * 60)
+        pytest.skip("Cleanup-only mode: all resources removed, skipping tests")
+
+    # ── Mode 2: Full install (operator + operands from bare cluster) ─────────
     if deployment_mode == "bootstrap":
         logger.info("")
         logger.info("=" * 60)
@@ -522,8 +540,15 @@ def ensure_spire_stack_deployed(
 
         _install_operator_if_needed(ocp_client, "local")
         _install_operator_if_needed(remote_ocp_client, "remote")
+    else:
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("OPERATOR-ONLY MODE: VALIDATE OPERATOR ON BOTH CLUSTERS")
+        logger.info("=" * 60)
+        _require_operator_ready(ocp_client, "local")
+        _require_operator_ready(remote_ocp_client, "remote")
 
-    # ── Mode 2 & 3: Deploy operands ────────────────────────────────────────
+    # ── Mode 1 & 2: Deploy operands ─────────────────────────────────────────
     logger.info("")
     logger.info("=" * 60)
     logger.info("DEPLOYING SPIRE STACK (OPERANDS) ON BOTH CLUSTERS")
@@ -579,18 +604,37 @@ def _install_operator_if_needed(client: OCPClient, cluster_label: str):
         pytest.fail(f"[{cluster_label}] Operator installation failed: {e}")
 
 
+def _require_operator_ready(client: OCPClient, cluster_label: str):
+    """Require existing operator installation and ready controller pod."""
+    installer = OperatorInstaller(client)
+    if not installer.is_installed():
+        pytest.fail(
+            f"[{cluster_label}] ZTWIM operator is not installed. "
+            "Use --deployment-mode=bootstrap to install it."
+        )
+    try:
+        installer.wait_for_operator_ready(timeout=300)
+        logger.info(f"[{cluster_label}] Operator is present and ready")
+    except Exception as e:
+        pytest.fail(f"[{cluster_label}] Operator is installed but not ready: {e}")
+
+
 def _deploy_stack_if_needed(
     client: OCPClient, app_domain: str, cluster_label: str, cluster_name: str
 ):
     """Deploy SPIRE stack (operands) on a cluster if not already present."""
-    verifier = ZTWIMInstallationVerifier(client)
+    deployer = ZTWIMStackDeployer(client)
 
-    try:
-        verifier.verify_all(timeout_per_component=30)
-        logger.info(f"[{cluster_label}] SPIRE stack already deployed and healthy")
-        return
-    except Exception:
-        logger.info(f"[{cluster_label}] SPIRE stack not fully ready, deploying operands...")
+    if deployer.is_deployed():
+        verifier = ZTWIMInstallationVerifier(client)
+        try:
+            verifier.verify_all(timeout_per_component=60)
+            logger.info(f"[{cluster_label}] SPIRE stack already deployed and healthy")
+            return
+        except Exception:
+            logger.info(f"[{cluster_label}] SPIRE stack partially deployed, redeploying...")
+    else:
+        logger.info(f"[{cluster_label}] No operands found, deploying SPIRE stack...")
 
     deployer = ZTWIMStackDeployer(client)
     try:
@@ -604,7 +648,8 @@ def _deploy_stack_if_needed(
     except Exception as e:
         pytest.fail(
             f"[{cluster_label}] Failed to deploy SPIRE stack: {e}\n"
-            f"Ensure the ZTWIM operator is installed, or use --bootstrap-clusters."
+            "Ensure the ZTWIM operator is installed and ready, "
+            "or use --deployment-mode=bootstrap."
         )
 
 
@@ -617,8 +662,7 @@ def _verify_stack(client: OCPClient, cluster_label: str):
     except Exception as e:
         pytest.fail(
             f"[{cluster_label}] SPIRE stack verification failed: {e}\n"
-            "Ensure ZTWIM is deployed. Run without --use-existing-deployment to "
-            "auto-deploy."
+            "Ensure ZTWIM is deployed, or use --deployment-mode=bootstrap."
         )
 
 
@@ -640,6 +684,85 @@ def _full_uninstall(client: OCPClient, cluster_label: str):
         logger.info(f"[{cluster_label}] Full uninstall complete")
     except Exception as e:
         logger.warning(f"[{cluster_label}] Full uninstall failed: {e}")
+
+
+def _cleanup_federation_resources(client: OCPClient, cluster_label: str):
+    """Delete all cluster-scoped federation resources (CFDTs, ClusterSPIFFEIDs)."""
+    logger.info(f"[{cluster_label}] Cleaning up federation resources...")
+
+    # Delete all ClusterFederatedTrustDomains
+    try:
+        cfdt_resource = client.get_crd_resource(
+            "spire.spiffe.io/v1alpha1", "ClusterFederatedTrustDomain"
+        )
+        cfdts = cfdt_resource.get()
+        for item in cfdts.get("items", []):
+            name = item["metadata"]["name"]
+            try:
+                cfdt_resource.delete(name=name)
+                logger.info(f"[{cluster_label}] Deleted CFDT: {name}")
+            except Exception as e:
+                logger.debug(f"[{cluster_label}] Failed to delete CFDT {name}: {e}")
+    except Exception as e:
+        logger.debug(f"[{cluster_label}] No CFDTs to clean or CRD not found: {e}")
+
+    # Delete all ClusterSPIFFEIDs
+    try:
+        spiffeid_resource = client.get_crd_resource(
+            "spire.spiffe.io/v1alpha1", "ClusterSPIFFEID"
+        )
+        spiffeids = spiffeid_resource.get()
+        for item in spiffeids.get("items", []):
+            name = item["metadata"]["name"]
+            try:
+                spiffeid_resource.delete(name=name)
+                logger.info(f"[{cluster_label}] Deleted ClusterSPIFFEID: {name}")
+            except Exception as e:
+                logger.debug(
+                    f"[{cluster_label}] Failed to delete ClusterSPIFFEID {name}: {e}"
+                )
+    except Exception as e:
+        logger.debug(f"[{cluster_label}] No ClusterSPIFFEIDs to clean or CRD not found: {e}")
+
+    logger.info(f"[{cluster_label}] Federation resources cleaned")
+
+
+def _cleanup_test_namespaces(local_client: OCPClient, remote_client: OCPClient):
+    """Delete any leftover federation test namespaces on both clusters."""
+    logger.info("Cleaning up leftover test namespaces...")
+
+    ns_prefix = "ztwim-test"
+    for client, label in [(local_client, "local"), (remote_client, "remote")]:
+        try:
+            namespaces = client.core_v1.list_namespace(
+                label_selector="purpose=ztwim-federation-test"
+            )
+            for ns in namespaces.items:
+                name = ns.metadata.name
+                try:
+                    client.delete_namespace(name, wait=False)
+                    logger.info(f"[{label}] Deleted test namespace: {name}")
+                except Exception as e:
+                    logger.debug(f"[{label}] Failed to delete namespace {name}: {e}")
+        except Exception:
+            pass
+
+        # Also clean namespaces matching the prefix pattern
+        try:
+            all_ns = client.core_v1.list_namespace()
+            for ns in all_ns.items:
+                if ns.metadata.name.startswith(ns_prefix):
+                    try:
+                        client.delete_namespace(ns.metadata.name, wait=False)
+                        logger.info(f"[{label}] Deleted test namespace: {ns.metadata.name}")
+                    except Exception as e:
+                        logger.debug(
+                            f"[{label}] Failed to delete namespace {ns.metadata.name}: {e}"
+                        )
+        except Exception:
+            pass
+
+    logger.info("Test namespace cleanup done")
 
 
 @pytest.fixture(scope="module")
@@ -818,6 +941,11 @@ class FederationHelper:
         Fetch the trust bundle by exec'ing into spire-server pod.
 
         Uses the SPIRE server CLI to show the bundle in JWKS format.
+        Retries automatically on transient errors (container not found, etc.)
+        using settings from config/settings.yaml -> polling.exec_retry.
+
+        The kubernetes stream() may return a Python dict repr (single quotes)
+        instead of raw JSON. This method normalizes the output to valid JSON.
         """
         pods = client.get_pods(
             namespace=self.namespace, label_selector=SPIRE_SERVER_POD_LABEL
@@ -826,11 +954,11 @@ class FederationHelper:
             raise RuntimeError("No spire-server pods found")
 
         pod_name = pods[0]["metadata"]["name"]
-        output = client.exec_in_pod(
+        output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/spire-server",
+                "/opt/spire/bin/spire-server",
                 "bundle",
                 "show",
                 "-socketPath",
@@ -840,10 +968,34 @@ class FederationHelper:
             ],
             container="spire-server",
         )
-        return output
+        return self._normalize_json_output(output)
+
+    @staticmethod
+    def _normalize_json_output(output: str) -> str:
+        """Ensure exec output is valid JSON, handling kubernetes stream quirks."""
+        if not output:
+            return output
+        try:
+            json.loads(output)
+            return output
+        except (json.JSONDecodeError, TypeError):
+            pass
+        if isinstance(output, dict):
+            return json.dumps(output)
+        import ast
+        try:
+            parsed = ast.literal_eval(str(output))
+            return json.dumps(parsed)
+        except (ValueError, SyntaxError):
+            return str(output)
 
     def list_federated_bundles(self, client: OCPClient) -> str:
-        """List all federated bundles in the SPIRE server."""
+        """
+        List all federated bundles in the SPIRE server.
+
+        Retries automatically on transient errors (container not found, etc.)
+        using settings from config/settings.yaml -> polling.exec_retry.
+        """
         pods = client.get_pods(
             namespace=self.namespace, label_selector=SPIRE_SERVER_POD_LABEL
         )
@@ -851,11 +1003,11 @@ class FederationHelper:
             raise RuntimeError("No spire-server pods found")
 
         pod_name = pods[0]["metadata"]["name"]
-        output = client.exec_in_pod(
+        output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/spire-server",
+                "/opt/spire/bin/spire-server",
                 "bundle",
                 "list",
                 "-socketPath",
@@ -866,7 +1018,12 @@ class FederationHelper:
         return output
 
     def show_spire_entries(self, client: OCPClient) -> str:
-        """Show SPIRE registration entries."""
+        """
+        Show SPIRE registration entries.
+
+        Retries automatically on transient errors (container not found, etc.)
+        using settings from config/settings.yaml -> polling.exec_retry.
+        """
         pods = client.get_pods(
             namespace=self.namespace, label_selector=SPIRE_SERVER_POD_LABEL
         )
@@ -874,11 +1031,11 @@ class FederationHelper:
             raise RuntimeError("No spire-server pods found")
 
         pod_name = pods[0]["metadata"]["name"]
-        output = client.exec_in_pod(
+        output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/spire-server",
+                "/opt/spire/bin/spire-server",
                 "entry",
                 "show",
                 "-socketPath",
@@ -934,6 +1091,11 @@ class FederationHelper:
             )
             resource.delete(name=name)
             logger.info(f"Deleted ClusterFederatedTrustDomain: {name}")
+        except ApiException as e:
+            if e.status == 404:
+                logger.debug(f"CFDT {name} not found (already deleted or never created)")
+            else:
+                logger.warning(f"Could not delete CFDT {name}: {e.reason}")
         except Exception as e:
             logger.warning(f"Could not delete CFDT {name}: {e}")
 
@@ -977,6 +1139,11 @@ class FederationHelper:
             resource = client.get_crd_resource(SPIFFE_API_VERSION, "ClusterSPIFFEID")
             resource.delete(name=name)
             logger.info(f"Deleted ClusterSPIFFEID: {name}")
+        except ApiException as e:
+            if e.status == 404:
+                logger.debug(f"ClusterSPIFFEID {name} not found (already deleted or never created)")
+            else:
+                logger.warning(f"Could not delete ClusterSPIFFEID {name}: {e.reason}")
         except Exception as e:
             logger.warning(f"Could not delete ClusterSPIFFEID {name}: {e}")
 

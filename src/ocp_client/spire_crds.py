@@ -20,13 +20,14 @@ from src.utils.polling import DynamicPoller, PollConfig
 
 logger = get_logger(__name__)
 
-# Default poller instance with sensible defaults
+# Default poller instance reading from settings
+_settings = get_settings()
 _poller = DynamicPoller(PollConfig(
     initial_delay=2.0,
-    min_interval=3.0,
-    max_interval=15.0,
-    backoff_factor=1.3,
-    timeout=300.0,
+    min_interval=_settings.polling.component_verify.interval,
+    max_interval=_settings.polling.component_verify.interval * 4,
+    backoff_factor=_settings.polling.component_verify.backoff_factor,
+    timeout=_settings.polling.component_verify.timeout,
     log_every=5
 ))
 
@@ -388,10 +389,10 @@ class OperatorInstaller:
                 return None
         
         config = PollConfig(
-            initial_delay=5.0,  # Give operator time to start
-            min_interval=5.0,
-            max_interval=20.0,
-            backoff_factor=1.3,
+            initial_delay=5.0,
+            min_interval=_settings.polling.operator.interval,
+            max_interval=_settings.polling.operator.interval * 4,
+            backoff_factor=_settings.polling.operator.backoff_factor,
             timeout=float(timeout),
             message="ZTWIM operator deployment"
         )
@@ -495,7 +496,7 @@ class OperatorInstaller:
             while time.time() - start_time < timeout:
                 try:
                     self.client.core_v1.read_namespace(name=self.OPERATOR_NAMESPACE)
-                    time.sleep(5)
+                    time.sleep(_settings.polling.cleanup.interval)
                 except Exception:
                     logger.info("✅ Namespace deleted")
                     break
@@ -548,6 +549,8 @@ class SpireServerManager(BaseCRDManager):
         self,
         app_domain: str,
         jwt_issuer_endpoint: str,
+        trust_domain: str,
+        cluster_name: str,
         name: str = "cluster",
         ca_country: str = "US",
         ca_organization: str = "RH",
@@ -559,6 +562,8 @@ class SpireServerManager(BaseCRDManager):
         Args:
             app_domain: OpenShift apps domain
             jwt_issuer_endpoint: JWT issuer endpoint URL
+            trust_domain: SPIFFE trust domain
+            cluster_name: Cluster name identifier
             name: Resource name (default: "cluster")
             ca_country: CA certificate country
             ca_organization: CA certificate organization
@@ -567,6 +572,19 @@ class SpireServerManager(BaseCRDManager):
         Returns:
             Created SpireServer
         """
+        trust_domain = (trust_domain or "").strip()
+        cluster_name = (cluster_name or "").strip()
+        if not trust_domain:
+            raise ValueError(
+                "SpireServer requires a non-empty trust_domain. "
+                "Provide --app-domain or set APP_DOMAIN."
+            )
+        if not cluster_name:
+            raise ValueError(
+                "SpireServer requires a non-empty cluster_name. "
+                "Provide --cluster-name or set CLUSTER_NAME."
+            )
+
         spec = {
             "caSubject": {
                 "commonName": app_domain,
@@ -586,6 +604,8 @@ class SpireServerManager(BaseCRDManager):
                 "connMaxLifetime": 3600,
             },
             "jwtIssuer": f"https://{jwt_issuer_endpoint}",
+            "trustDomain": trust_domain,
+            "clusterName": cluster_name,
             **kwargs
         }
         
@@ -941,7 +961,7 @@ class ZTWIMInstallationVerifier:
         logger.info(f"Verifying SpireServer StatefulSet: {self.SPIRE_SERVER_STATEFULSET}")
         
         start_time = time.time()
-        poll_interval = self.settings.testing.poll_interval
+        poll_interval = self.settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -975,7 +995,7 @@ class ZTWIMInstallationVerifier:
         logger.info(f"Verifying SpireAgent DaemonSet: {self.SPIRE_AGENT_DAEMONSET}")
         
         start_time = time.time()
-        poll_interval = self.settings.testing.poll_interval
+        poll_interval = self.settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1009,7 +1029,7 @@ class ZTWIMInstallationVerifier:
         logger.info(f"Verifying SpiffeCSIDriver DaemonSet: {self.CSI_DRIVER_DAEMONSET}")
         
         start_time = time.time()
-        poll_interval = self.settings.testing.poll_interval
+        poll_interval = self.settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1043,7 +1063,7 @@ class ZTWIMInstallationVerifier:
         logger.info(f"Verifying OIDC Provider Deployment: {self.OIDC_DEPLOYMENT}")
         
         start_time = time.time()
-        poll_interval = self.settings.testing.poll_interval
+        poll_interval = self.settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1327,7 +1347,7 @@ class ZTWIMStackDeployer:
             Dict with all created resources
         """
         domain = app_domain or self.get_app_domain()
-        name = cluster_name or self.settings.ztwim.cluster_name
+        name = cluster_name or self.settings.ztwim.cluster_name or "test01"
         jwt_endpoint = self.get_jwt_issuer_endpoint(domain)
         
         logger.info(f"Deploying ZTWIM stack:")
@@ -1346,14 +1366,16 @@ class ZTWIMStackDeployer:
             cluster_name=name
         )
         logger.info("✅ ZeroTrustWorkloadIdentityManager CR created")
-        time.sleep(3)  # Brief pause for operator to process
+        time.sleep(_settings.polling.component_verify.interval)
         
         # 2. SpireServer - MUST be ready before SpireAgent
         logger.info("")
         logger.info("Step 2/5: Creating SpireServer...")
         results["spire_server"] = self.server_manager.create_default(
             app_domain=domain,
-            jwt_issuer_endpoint=jwt_endpoint
+            jwt_issuer_endpoint=jwt_endpoint,
+            trust_domain=domain,
+            cluster_name=name,
         )
         logger.info("✅ SpireServer CR created")
         
@@ -1402,7 +1424,7 @@ class ZTWIMStackDeployer:
     def _wait_for_spire_server_ready(self, timeout: int = 120) -> bool:
         """Wait for SpireServer StatefulSet to be ready."""
         start_time = time.time()
-        poll_interval = 5
+        poll_interval = _settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1428,7 +1450,7 @@ class ZTWIMStackDeployer:
     def _wait_for_spire_agent_ready(self, timeout: int = 120) -> bool:
         """Wait for SpireAgent DaemonSet to be ready."""
         start_time = time.time()
-        poll_interval = 5
+        poll_interval = _settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1459,7 +1481,7 @@ class ZTWIMStackDeployer:
         registered before it can mount SPIFFE workload API volumes.
         """
         start_time = time.time()
-        poll_interval = 5
+        poll_interval = _settings.polling.component_verify.interval
         
         while time.time() - start_time < timeout:
             try:
@@ -1474,8 +1496,7 @@ class ZTWIMStackDeployer:
                 
                 if csi_drivers:
                     logger.info("✅ CSI Driver registered: csi.spiffe.io")
-                    # Additional wait for CSI pods to be ready
-                    time.sleep(5)
+                    time.sleep(poll_interval)
                     return True
                     
             except Exception as e:
@@ -1493,8 +1514,7 @@ class ZTWIMStackDeployer:
                 
                 if ready >= desired and ready > 0:
                     logger.info(f"✅ CSI Driver DaemonSet ready: {ready}/{desired} pods")
-                    # Give extra time for CSI registration to propagate
-                    time.sleep(10)
+                    time.sleep(poll_interval * 2)
                     return True
                 
                 logger.debug(f"CSI Driver: {ready}/{desired} pods ready")
@@ -1612,7 +1632,7 @@ class ZTWIMStackDeployer:
         """
         namespace = OperatorInstaller.OPERATOR_NAMESPACE
         start_time = time.time()
-        poll_interval = 5
+        poll_interval = _settings.polling.cleanup.interval
         
         # Pod label selectors for operand components
         operand_labels = [
@@ -1680,7 +1700,7 @@ class ZTWIMStackDeployer:
                         logger.debug(f"Failed to force delete {pod.metadata.name}: {e}")
             
             # Give a moment for deletions to process
-            time.sleep(5)
+            time.sleep(_settings.polling.cleanup.interval)
             logger.info("✅ Force deleted stuck pods")
             
         except Exception as e:
@@ -1907,7 +1927,7 @@ class ZTWIMFullInstaller:
             
             if pvcs.items:
                 logger.info(f"✅ Deleted {len(pvcs.items)} PVCs")
-                time.sleep(5)  # Wait for PVC deletion
+                time.sleep(_settings.polling.cleanup.interval)
                 
         except Exception as e:
             logger.debug(f"Error cleaning up resources: {e}")
