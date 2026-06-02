@@ -233,7 +233,7 @@ class OCPClient:
     
     def _is_pod_ready(self, pod: Dict[str, Any]) -> bool:
         """Check if a pod is ready."""
-        conditions = pod.get("status", {}).get("conditions", [])
+        conditions = pod.get("status", {}).get("conditions") or []
         for condition in conditions:
             if condition.get("type") == "Ready" and condition.get("status") == "True":
                 return True
