@@ -62,7 +62,7 @@ dev = [
 ztwim-test = "src.cli:app"
 
 [tool.pytest.ini_options]
-testpaths = ["tests/federation"]
+testpaths = ["tests/federation", "tests/ossm"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -76,6 +76,7 @@ addopts = [
 ]
 markers = [
     "federation: Tests for cluster federation",
+    "ossm: Tests for single-cluster OSSM + SPIRE integration",
     "slow: Marks tests as slow running",
     "destructive: Tests that modify cluster state significantly",
 ]
