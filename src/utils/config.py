@@ -93,6 +93,9 @@ class PollingConfig(BaseModel):
     federation: PollSettings = Field(
         default_factory=lambda: PollSettings(timeout=300, interval=10, backoff_factor=1.5)
     )
+    ossm_federation: PollSettings = Field(
+        default_factory=lambda: PollSettings(timeout=300, interval=10, backoff_factor=1.5)
+    )
     operator: PollSettings = Field(
         default_factory=lambda: PollSettings(timeout=300, interval=10, backoff_factor=1.5)
     )

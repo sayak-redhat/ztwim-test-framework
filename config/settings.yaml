@@ -60,6 +60,12 @@ polling:
     interval: 10
     backoff_factor: 1.5
 
+  # OSSM cross-cluster federation (longer timeouts for multi-cluster ops)
+  ossm_federation:
+    timeout: 300
+    interval: 10
+    backoff_factor: 1.5
+
   # Operator readiness (CSV installed, deployment available)
   operator:
     timeout: 300
