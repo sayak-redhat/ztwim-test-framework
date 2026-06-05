@@ -1,10 +1,15 @@
-# ZTWIM Federation Test Framework
+# ZTWIM Test Framework
 
-Federation-focused pytest framework for validating SPIRE federation (mTLS workload identity) across two OpenShift clusters using the **Zero Trust Workload Identity Manager** operator.
+Pytest framework for validating the **Zero Trust Workload Identity Manager** operator on OpenShift. Covers two areas:
+
+1. **Federation** — Cross-cluster SPIRE federation with mTLS (two clusters)
+2. **OSSM Integration** — SPIRE + Istio service mesh on a single cluster
 
 ---
 
 ## What This Framework Tests
+
+### SPIRE Federation (`tests/federation/test_https_spiffe_federation.py`)
 
 - SpireServer federation configuration (`https_spiffe` profile)
 - Federation route readiness and endpoint exposure
@@ -12,17 +17,52 @@ Federation-focused pytest framework for validating SPIRE federation (mTLS worklo
 - mTLS workload identity provisioning (SVID certificates)
 - Cross-cluster mTLS handshake validation
 
+### OSSM Cross-Cluster Federation (`tests/federation/test_ossm_spire_cross_cluster_federation.py`)
+
+- SDS auto-config without `CREATE_ONLY_MODE` on both clusters
+- SPIRE trust bundle exchange via `ClusterFederatedTrustDomain`
+- Istio CR with multi-cluster federation fields (trustDomainAliases, spiffeBundleUrl)
+- East-west gateway deployment with SPIRE sidecar injection
+- Forward and reverse cross-cluster mTLS (sleep A → helloworld B and vice versa)
+- STRICT mTLS across all 4 traffic patterns (local + cross-cluster on both clusters)
+- SPIRE-issued SPIFFE SVIDs on all workloads (not Istio CA)
+- Cross-cluster load balancing (requests hit both v1 and v2)
+- Negative test: workload without `federatesWith` fails cross-cluster
+
+### OSSM + SPIRE Integration (`tests/ossm/`)
+
+- Auto-generated SDS config in spire-agent ConfigMap (PR #120)
+- SPIRE-issued certificates in Istio sidecars (not Istio CA)
+- STRICT mTLS between services using SPIFFE IDs
+- Operator reconciliation of SDS config (delete, corrupt, recreate)
+- Data plane resilience (spire-agent restart, operator restart)
+
 ---
 
 ## Prerequisites
+
+### Common
+
+| Requirement | Details |
+|-------------|---------|
+| Python 3.10+ | With pip available |
+| `oc` CLI | Logged in to cluster(s) for manual verification |
+
+### Federation tests (two clusters)
 
 | Requirement | Details |
 |-------------|---------|
 | Two OpenShift 4.18+ clusters | With cluster-admin access on both |
 | ZTWIM operator installed | On both clusters (for `operator-only` mode) |
 | Network connectivity | Federation routes must be accessible between clusters |
-| Python 3.10+ | With pip available |
-| `oc` CLI | Logged in to both clusters (for manual verification) |
+
+### OSSM tests (single cluster)
+
+| Requirement | Details |
+|-------------|---------|
+| One OpenShift 4.18+ cluster | With cluster-admin access |
+| ZTWIM operator installed | With PR #120 SDS auto-config support |
+| Sail Operator available | In `community-operators` catalog (framework auto-installs it) |
 
 ---
 
@@ -150,67 +190,114 @@ pytest tests/federation/ -v \
 
 ### Running Specific Test Suites
 
-The framework includes multiple test files under `tests/federation/`. Running `pytest tests/federation/` collects **all** of them, but some suites require additional configuration and will be skipped automatically if it is missing.
-
 #### Available test suites
 
-| Test File | Marker | Description | Extra Config Required |
-|-----------|--------|-------------|----------------------|
-| `test_https_spiffe_federation.py` | `@pytest.mark.federation` | Standard `https_spiffe` federation with mTLS validation | None (runs by default) |
+| Test Suite | Path | Marker | Clusters | What it validates |
+|------------|------|--------|----------|-------------------|
+| SPIRE Federation | `tests/federation/test_https_spiffe_federation.py` | `federation` | 2 | Cross-cluster SPIRE federation + raw mTLS |
+| OSSM Federation | `tests/federation/test_ossm_spire_cross_cluster_federation.py` | `ossm_federation` | 2 | Cross-cluster OSSM + SPIRE (Istio mesh, EW gateway, SVID, load balancing) |
+| OSSM + SPIRE | `tests/ossm/` | `ossm` | 1 | Single-cluster Istio service mesh with SPIRE identities |
 
-#### Run all tests (default)
+#### Run all federation tests (SPIRE + OSSM)
 
 ```bash
-pytest tests/federation/ -v \
+python -m pytest tests/federation/ -v -s \
+  --kubeconfig=/path/to/cluster1/kubeconfig \
+  --remote-kubeconfig=/path/to/cluster2/kubeconfig \
   --deployment-mode=operator-only \
   --keep-deployed \
-  --remote-kubeconfig=/path/to/remote/kubeconfig
+  --ossm-namespace=istio-system
 ```
 
-#### Run only the standard https_spiffe federation tests
+#### SPIRE-only federation tests
 
 ```bash
-pytest tests/federation/test_https_spiffe_federation.py -v \
+python -m pytest tests/federation/test_https_spiffe_federation.py -v -s \
+  --kubeconfig=/path/to/cluster1/kubeconfig \
+  --remote-kubeconfig=/path/to/cluster2/kubeconfig \
+  --deployment-mode=operator-only \
+  --keep-deployed
+```
+
+#### OSSM cross-cluster federation tests
+
+```bash
+python -m pytest tests/federation/test_ossm_spire_cross_cluster_federation.py -v -s \
+  --kubeconfig=/path/to/cluster1/kubeconfig \
+  --remote-kubeconfig=/path/to/cluster2/kubeconfig \
   --deployment-mode=operator-only \
   --keep-deployed \
-  --remote-kubeconfig=/path/to/remote/kubeconfig
+  --ossm-namespace=istio-system
 ```
 
-#### Run a single test class or method
+#### Run a specific test class
 
 ```bash
-# A specific test class
 pytest "tests/federation/test_https_spiffe_federation.py::TestCrossClusterMTLS" -v \
   --deployment-mode=operator-only --keep-deployed \
   --remote-kubeconfig=/path/to/remote/kubeconfig
-
 ```
+
+#### OSSM tests (single cluster, no remote kubeconfig needed)
+
+```bash
+# Run all OSSM tests
+pytest tests/ossm/ -v \
+  --deployment-mode=operator-only \
+  --keep-deployed
+
+# Run a specific phase
+pytest "tests/ossm/test_ossm_spire_integration.py::TestIstioMutualWithSpire" -v \
+  --deployment-mode=operator-only --keep-deployed
+```
+
+The framework auto-installs the **Sail Operator**, **IstioCNI**, and **Istio CR** with SPIRE config. No manual Istio setup needed.
 
 #### Run tests by marker
 
 ```bash
-# Only federation-marked tests (default for all tests under tests/federation/)
 pytest tests/federation/ -v -m federation
+pytest tests/ossm/ -v -m ossm
 ```
 
 ### Full CLI Reference
 
+#### Common options (both suites)
+
 ```bash
-pytest tests/federation/ -v \
-  --kubeconfig=<path>              # Local cluster kubeconfig
-  --remote-kubeconfig=<path>       # Remote cluster kubeconfig
+  --kubeconfig=<path>              # Cluster kubeconfig
   --deployment-mode=operator-only  # operator-only | bootstrap
   --keep-deployed                  # Keep operands after tests
-  --app-domain=<domain>            # Override local apps domain
-  --remote-app-domain=<domain>     # Override remote apps domain
+  --app-domain=<domain>            # Override apps domain
   --cluster-name=<name>            # ZTWIM cluster name (default: test01)
-  --federation-profile=https_spiffe  # Federation profile
-  --federation-timeout=300         # Bundle sync timeout (seconds)
-  --mtls-timeout=240               # mTLS workload timeout (seconds)
   --operator-timeout=300           # Operator install timeout (seconds)
   --component-timeout=120          # Per-component verify timeout (seconds)
   --skip-cleanup                   # Don't clean up test namespaces
   --cleanup-only-mode              # Only run cleanup, skip tests
+```
+
+#### Federation-only options
+
+```bash
+  --remote-kubeconfig=<path>       # Remote cluster kubeconfig
+  --remote-app-domain=<domain>     # Override remote apps domain
+  --federation-profile=https_spiffe  # Federation profile
+  --federation-timeout=300         # Bundle sync timeout (seconds)
+  --mtls-timeout=240               # mTLS workload timeout (seconds)
+```
+
+#### OSSM-only options
+
+```bash
+  --ossm-namespace=<ns>            # Istiod namespace (default: istio-system)
+  --ossm-cni-namespace=<ns>        # IstioCNI namespace (default: istio-cni)
+  --ossm-timeout=300               # OSSM operations timeout (seconds)
+  --spiffe-audience=<audience>     # SPIFFE audience annotation (default: sky-computing-demo)
+  --httpbin-image=<image>          # httpbin container image
+  --curl-image=<image>             # curl client container image
+  --sail-channel=<channel>         # Sail Operator OLM channel (default: stable)
+  --sail-version=<version>         # Istio/IstioCNI version (default: v1.30-latest)
+  --skip-gateway-tests             # Skip ingress gateway tests
 ```
 
 ---
@@ -244,6 +331,14 @@ jobs:
             --deployment-mode=operator-only \
             --keep-deployed \
             --html=test-reports/report.html --self-contained-html
+
+      - name: Run OSSM tests (single cluster)
+        run: |
+          pytest tests/ossm/ -v \
+            --kubeconfig=/tmp/cluster1.kubeconfig \
+            --deployment-mode=operator-only \
+            --keep-deployed \
+            --html=test-reports/ossm-report.html --self-contained-html
 ```
 
 ### OpenShift CI (Prow) Example
@@ -269,38 +364,28 @@ tests:
 
 ## Test Execution Flow
 
+### Federation tests
+
 ```
-1. Setup Phase
-   ├── Connect to both clusters (local + remote)
-   ├── Auto-detect app domains from DNS
-   ├── Verify operator is ready (operator-only) OR install it (bootstrap)
-   └── Deploy operands if missing
+1. Setup — Connect to both clusters, deploy ZTWIM stack
+2. Prerequisites — SpireServer, SpireAgent, CSI Driver ready on both
+3. Federation Config — Patch SpireServers, verify routes, fetch bundles
+4. Trust Bootstrap — Create ClusterFederatedTrustDomain, wait for sync
+5. mTLS Workloads — Deploy server (local) + client (remote), verify SVIDs
+6. Cross-Cluster mTLS — End-to-end mTLS handshake across clusters
+7. Cleanup — Remove test workloads and federation resources
+```
 
-2. Prerequisite Checks (Phase 0)
-   ├── SpireServer pods ready on both clusters
-   ├── SpireAgent pods ready on both clusters
-   └── CSI Driver pods ready on both clusters
+### OSSM tests
 
-3. Federation Configuration (Phase 1)
-   ├── Patch SpireServers to enable federation
-   ├── Verify federation routes are admitted
-   └── Fetch trust bundles from both clusters
-
-4. Trust Bootstrap (Phase 2)
-   ├── Create ClusterFederatedTrustDomain on both clusters
-   └── Wait for bundle sync (remote domain appears in local bundle list)
-
-5. mTLS Workloads (Phase 3)
-   ├── Deploy mTLS server on local cluster
-   ├── Deploy mTLS client on remote cluster
-   ├── Wait for SVID certificates to be provisioned
-   └── Verify SPIFFE IDs in certificates
-
-6. Cross-Cluster mTLS (Phase 4)
-   └── Validate end-to-end mTLS handshake across clusters
-
-7. Cleanup (Phase 5)
-   └── Remove test workloads and federation resources
+```
+1. Setup — Connect to cluster, deploy ZTWIM stack + Sail Operator + IstioCNI + Istio CR
+2. Prerequisites — SpireServer, SpireAgent, Istiod, IstioCNI, SDS config verified
+3. SPIRE Cert Verification — Deploy httpbin, confirm SPIRE-issued certs in Envoy sidecars
+4. STRICT mTLS — Deploy httpbin + curl, apply STRICT PeerAuthentication, verify traffic
+5. Operator Reconciliation — Delete/corrupt SDS config, verify operator self-heals
+6. Data Plane Resilience — Restart spire-agent and operator pods, verify mTLS survives
+7. Final Health Check — Confirm SPIRE stack + SDS config intact after all tests
 ```
 
 ---
@@ -381,25 +466,31 @@ pytest tests/federation/ -v \
 ### Common Scenarios
 
 ```bash
-# Development: keep everything for debugging
+# Federation — development (keep everything)
 pytest tests/federation/ -v \
   --kubeconfig=... --remote-kubeconfig=... \
   --deployment-mode=operator-only \
   --keep-deployed --skip-cleanup
 
-# CI: full cleanup after each run
+# Federation — CI (full cleanup)
 pytest tests/federation/ -v \
   --kubeconfig=... --remote-kubeconfig=... \
   --deployment-mode=bootstrap
 
-# Manual cleanup of a stuck/failed run
+# Federation — cleanup stuck/failed run
 pytest tests/federation/ -v \
   --kubeconfig=... --remote-kubeconfig=... \
   --cleanup-only-mode
 
-# Clean up operands only (preserve operator) for a specific test file
-pytest tests/federation/test_https_spiffe_federation.py \
+# OSSM — development (keep Sail + Istio deployed)
+pytest tests/ossm/ -v \
+  --kubeconfig=... \
   --deployment-mode=operator-only \
+  --keep-deployed
+
+# OSSM — cleanup (remove Istio CR, IstioCNI, Sail Operator, test namespaces)
+pytest tests/ossm/ -v \
+  --kubeconfig=... \
   --cleanup-only-mode
 ```
 
@@ -428,17 +519,24 @@ ls test-reports/
 ├── config/
 │   └── settings.yaml        # All tunable settings (timeouts, polling, etc.)
 ├── src/
+│   ├── helpers/
+│   │   ├── ossm.py              # OSSMHelper (Sail/Istio lifecycle)
+│   │   └── ossm_federation.py   # OSSMFederationHelper (cross-cluster OSSM + SPIRE)
 │   ├── ocp_client/
-│   │   ├── client.py       # OCPClient (K8s API wrapper)
-│   │   └── spire_crds.py   # CRD managers (operator, operands)
+│   │   ├── client.py            # OCPClient (K8s API wrapper)
+│   │   └── spire_crds.py        # CRD managers (operator, operands)
 │   └── utils/
-│       ├── config.py        # Settings model (loads settings.yaml)
-│       ├── polling.py       # DynamicPoller, retry_on_error utilities
-│       └── logger.py        # Framework logger
+│       ├── config.py             # Settings model (loads settings.yaml)
+│       ├── polling.py            # DynamicPoller, retry_on_error utilities
+│       └── logger.py             # Framework logger
 ├── tests/
-│   └── federation/
-│       ├── conftest.py      # Fixtures, CLI options, setup/teardown
-│       └── test_https_spiffe_federation.py              # Standard https_spiffe federation suite
+│   ├── federation/
+│   │   ├── conftest.py          # Federation fixtures (two-cluster setup, OSSM fixtures)
+│   │   ├── test_https_spiffe_federation.py
+│   │   └── test_ossm_spire_cross_cluster_federation.py
+│   └── ossm/
+│       ├── conftest.py          # OSSM fixtures (single-cluster Sail + SPIRE)
+│       └── test_ossm_spire_integration.py
 ├── scripts/
 │   └── install_ztwim.py     # Standalone installer script
 ├── test-reports/            # Generated HTML reports
@@ -449,6 +547,8 @@ ls test-reports/
 
 ## Troubleshooting
 
+### Federation
+
 | Symptom | Fix |
 |---------|-----|
 | `TimeoutError: Pods not ready within 180s` | Increase `polling.pod_readiness.timeout` in settings.yaml |
@@ -456,3 +556,13 @@ ls test-reports/
 | `No spire-server pods found` | Operator may not have reconciled yet. Check `oc get pods -n zero-trust-workload-identity-manager` |
 | `Federation route not ready` | Check `oc get routes -n zero-trust-workload-identity-manager`. Increase `polling.federation.timeout` |
 | `Remote trust domain not found in bundle list` | Bundle sync takes time. Increase `polling.federation.timeout` |
+
+### OSSM
+
+| Symptom | Fix |
+|---------|-----|
+| `Sail Operator CSV not ready` | Check `oc get csv -n openshift-operators`. Verify `community-operators` catalog is available |
+| `Istiod pod not found` | Istio CR may not have reconciled. Check `oc get istio default -o yaml` for status |
+| `SDS section missing from ConfigMap` | Requires ZTWIM operator with PR #120. Check operator version |
+| `istio-proxy sidecar not injected` | Ensure namespace has label `istio-injection=enabled` and injection webhook exists |
+| `SPIRE-issued certificate not found in Envoy` | SPIRE agent may not have rotated certs yet. Increase `polling.pod_readiness.timeout` |

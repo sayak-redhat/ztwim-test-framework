@@ -51,6 +51,8 @@ from src.utils.logger import get_logger, log_test_end, log_test_start
 from src.utils.polling import wait_until, PollConfig, DynamicPoller
 from src.utils.test_reporting import ReportManager
 from src.utils.ztwim_setup import ZTWIMSetupOrchestrator
+from src.helpers.ossm import OSSMHelper, OSSMScenarioConfig
+from src.helpers.ossm_federation import OSSMFederationHelper
 
 logger = get_logger("federation.fixtures")
 report_manager = ReportManager(
@@ -219,6 +221,44 @@ def pytest_addoption(parser):
         type=int,
         default=240,
         help="Timeout for mTLS workload readiness (seconds)",
+    )
+
+    ossm_group = parser.getgroup("ossm_federation", "OSSM cross-cluster federation options")
+    ossm_group.addoption(
+        "--ossm-namespace", action="store", default="istio-system",
+        help="Namespace where Istiod is deployed",
+    )
+    ossm_group.addoption(
+        "--ossm-cni-namespace", action="store", default="istio-cni",
+        help="Namespace for IstioCNI DaemonSet",
+    )
+    ossm_group.addoption(
+        "--ossm-timeout", action="store", type=int, default=300,
+        help="Timeout for OSSM operations (seconds)",
+    )
+    ossm_group.addoption(
+        "--sail-channel", action="store", default="stable",
+        help="Sail Operator OLM channel",
+    )
+    ossm_group.addoption(
+        "--sail-version", action="store", default="v1.30-latest",
+        help="Istio/IstioCNI version for Sail CRs",
+    )
+    ossm_group.addoption(
+        "--workload-namespace", action="store", default="sample",
+        help="Namespace for federation workloads",
+    )
+    ossm_group.addoption(
+        "--nofed-namespace", action="store", default="nofed",
+        help="Namespace for negative-test workloads (no federatesWith)",
+    )
+    ossm_group.addoption(
+        "--local-cluster-name", action="store", default="cluster-a",
+        help="Cluster A name for multi-cluster config",
+    )
+    ossm_group.addoption(
+        "--remote-cluster-name", action="store", default="cluster-b",
+        help="Cluster B name for multi-cluster config",
     )
 
 
@@ -839,6 +879,7 @@ class FederationHelper:
         self.remote = remote_client
         self.namespace = namespace
         self.config = scenario_config
+        self._spire_server_bin: Dict[int, str] = {}
         self._poller = DynamicPoller(
             PollConfig(
                 initial_delay=2.0,
@@ -936,6 +977,49 @@ class FederationHelper:
         host = route["spec"]["host"]
         return f"https://{host}"
 
+    _SPIRE_SERVER_BIN_CANDIDATES = [
+        "/spire-server",               # Red Hat productized image
+        "/opt/spire/bin/spire-server",  # Upstream open-source image
+    ]
+
+    def _get_spire_server_bin(self, client: OCPClient) -> str:
+        """Auto-detect the spire-server binary path inside the container.
+
+        Tries known candidate paths, caches per client so the probe runs once.
+        """
+        cache_key = id(client)
+        if cache_key in self._spire_server_bin:
+            return self._spire_server_bin[cache_key]
+
+        pods = client.get_pods(
+            namespace=self.namespace, label_selector=SPIRE_SERVER_POD_LABEL
+        )
+        if not pods:
+            raise RuntimeError("No spire-server pods found")
+
+        pod_name = pods[0]["metadata"]["name"]
+        for candidate in self._SPIRE_SERVER_BIN_CANDIDATES:
+            try:
+                output = client.exec_in_pod(
+                    name=pod_name,
+                    namespace=self.namespace,
+                    command=[candidate, "--help"],
+                    container="spire-server",
+                )
+                if "not found" not in (output or ""):
+                    logger.info(f"Detected spire-server binary: {candidate}")
+                    self._spire_server_bin[cache_key] = candidate
+                    return candidate
+            except Exception:
+                continue
+
+        fallback = self._SPIRE_SERVER_BIN_CANDIDATES[0]
+        logger.warning(
+            f"Could not detect spire-server binary, falling back to {fallback}"
+        )
+        self._spire_server_bin[cache_key] = fallback
+        return fallback
+
     def fetch_trust_bundle_via_exec(self, client: OCPClient) -> str:
         """
         Fetch the trust bundle by exec'ing into spire-server pod.
@@ -953,12 +1037,13 @@ class FederationHelper:
         if not pods:
             raise RuntimeError("No spire-server pods found")
 
+        spire_bin = self._get_spire_server_bin(client)
         pod_name = pods[0]["metadata"]["name"]
         output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/opt/spire/bin/spire-server",
+                spire_bin,
                 "bundle",
                 "show",
                 "-socketPath",
@@ -1002,12 +1087,13 @@ class FederationHelper:
         if not pods:
             raise RuntimeError("No spire-server pods found")
 
+        spire_bin = self._get_spire_server_bin(client)
         pod_name = pods[0]["metadata"]["name"]
         output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/opt/spire/bin/spire-server",
+                spire_bin,
                 "bundle",
                 "list",
                 "-socketPath",
@@ -1030,12 +1116,13 @@ class FederationHelper:
         if not pods:
             raise RuntimeError("No spire-server pods found")
 
+        spire_bin = self._get_spire_server_bin(client)
         pod_name = pods[0]["metadata"]["name"]
         output = client.exec_in_pod_with_retry(
             name=pod_name,
             namespace=self.namespace,
             command=[
-                "/opt/spire/bin/spire-server",
+                spire_bin,
                 "entry",
                 "show",
                 "-socketPath",
@@ -1491,3 +1578,139 @@ def federation_namespaces(
             remote_ocp_client.delete_namespace(client_ns, wait=False)
         except Exception as e:
             logger.warning(f"Failed to delete client namespace: {e}")
+
+
+# =============================================================================
+# OSSM Cross-Cluster Federation Fixtures
+# =============================================================================
+
+
+@pytest.fixture(scope="module")
+def local_client(ocp_client) -> OCPClient:
+    """Alias for the local cluster client (matches OSSM test convention)."""
+    return ocp_client
+
+
+@pytest.fixture(scope="module")
+def remote_client(remote_ocp_client) -> OCPClient:
+    """Alias for the remote cluster client (matches OSSM test convention)."""
+    return remote_ocp_client
+
+
+@pytest.fixture(scope="module")
+def local_kubeconfig(kubeconfig_path) -> str:
+    """Alias for the local kubeconfig path."""
+    return kubeconfig_path
+
+
+@pytest.fixture(scope="module")
+def local_trust_domain(local_app_domain) -> str:
+    """Trust domain for the local cluster (derived from apps domain)."""
+    return local_app_domain
+
+
+@pytest.fixture(scope="module")
+def remote_trust_domain(remote_app_domain) -> str:
+    """Trust domain for the remote cluster (derived from apps domain)."""
+    return remote_app_domain
+
+
+@pytest.fixture(scope="module")
+def workload_namespace(request) -> str:
+    """Namespace for OSSM federation workloads."""
+    return request.config.getoption("--workload-namespace")
+
+
+@pytest.fixture(scope="module")
+def nofed_namespace(request) -> str:
+    """Namespace for negative-test workloads (no federatesWith)."""
+    return request.config.getoption("--nofed-namespace")
+
+
+@pytest.fixture(scope="module")
+def ossm_namespace(request) -> str:
+    """Namespace where Istiod is deployed."""
+    return request.config.getoption("--ossm-namespace")
+
+
+@pytest.fixture(scope="module")
+def ossm_timeout(request) -> int:
+    """Timeout for OSSM operations."""
+    return request.config.getoption("--ossm-timeout")
+
+
+@pytest.fixture(scope="module")
+def local_cluster_name(request) -> str:
+    """Cluster A name for multi-cluster config."""
+    return request.config.getoption("--local-cluster-name")
+
+
+@pytest.fixture(scope="module")
+def remote_cluster_name(request) -> str:
+    """Cluster B name for multi-cluster config."""
+    return request.config.getoption("--remote-cluster-name")
+
+
+@pytest.fixture(scope="module")
+def local_ossm_helper(
+    request, ocp_client, operator_namespace, ossm_namespace,
+) -> OSSMHelper:
+    """OSSMHelper for the local cluster."""
+    cni_ns = request.config.getoption("--ossm-cni-namespace")
+    sail_ver = request.config.getoption("--sail-version")
+    cfg = OSSMScenarioConfig(ossm_namespace=ossm_namespace, cni_namespace=cni_ns, sail_version=sail_ver)
+    return OSSMHelper(
+        client=ocp_client,
+        operator_namespace=operator_namespace,
+        ossm_namespace=ossm_namespace,
+        cni_namespace=cni_ns,
+        config=cfg,
+    )
+
+
+@pytest.fixture(scope="module")
+def remote_ossm_helper(
+    request, remote_ocp_client, operator_namespace, ossm_namespace,
+) -> OSSMHelper:
+    """OSSMHelper for the remote cluster."""
+    cni_ns = request.config.getoption("--ossm-cni-namespace")
+    sail_ver = request.config.getoption("--sail-version")
+    cfg = OSSMScenarioConfig(ossm_namespace=ossm_namespace, cni_namespace=cni_ns, sail_version=sail_ver)
+    return OSSMHelper(
+        client=remote_ocp_client,
+        operator_namespace=operator_namespace,
+        ossm_namespace=ossm_namespace,
+        cni_namespace=cni_ns,
+        config=cfg,
+    )
+
+
+@pytest.fixture(scope="module")
+def ossm_federation_helper(
+    ocp_client, remote_ocp_client, operator_namespace,
+    local_ossm_helper, remote_ossm_helper,
+    local_app_domain, remote_app_domain,
+    local_trust_domain, remote_trust_domain,
+    kubeconfig_path, remote_kubeconfig,
+    ossm_namespace, workload_namespace, nofed_namespace,
+    local_cluster_name, remote_cluster_name,
+) -> OSSMFederationHelper:
+    """OSSMFederationHelper for cross-cluster OSSM + SPIRE federation tests."""
+    return OSSMFederationHelper(
+        local_client=ocp_client,
+        remote_client=remote_ocp_client,
+        operator_namespace=operator_namespace,
+        local_ossm=local_ossm_helper,
+        remote_ossm=remote_ossm_helper,
+        local_app_domain=local_app_domain,
+        remote_app_domain=remote_app_domain,
+        local_trust_domain=local_trust_domain,
+        remote_trust_domain=remote_trust_domain,
+        local_kubeconfig=kubeconfig_path,
+        remote_kubeconfig=remote_kubeconfig,
+        ossm_namespace=ossm_namespace,
+        workload_namespace=workload_namespace,
+        nofed_namespace=nofed_namespace,
+        local_cluster_name=local_cluster_name,
+        remote_cluster_name=remote_cluster_name,
+    )
